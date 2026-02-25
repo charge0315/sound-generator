@@ -1,4 +1,6 @@
 pub mod events;
+pub mod icon;
+pub mod policy;
 
 use std::ptr;
 use windows::{
@@ -11,8 +13,10 @@ use windows::{
             MMDeviceEnumerator,
         },
         System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED},
-        System::ProcessStatus::K32GetProcessImageFileNameW,
-        System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ},
+        System::Threading::{
+            OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+            PROCESS_QUERY_LIMITED_INFORMATION,
+        },
     },
 };
 
@@ -38,10 +42,12 @@ pub struct AudioSessionInfo {
     pub process_name: String,
     pub volume: f32,
     pub is_muted: bool,
+    pub icon_base64: Option<String>,
 }
 
 pub struct AudioManager {
     device_enumerator: IMMDeviceEnumerator,
+    app_handle: Option<tauri::AppHandle>,
 }
 
 // IMMDeviceEnumeratorをはじめとするCOMインターフェースは標準ではスレッドセーフ（Send/Sync）とは
@@ -56,8 +62,15 @@ impl AudioManager {
         unsafe {
             let device_enumerator: IMMDeviceEnumerator =
                 CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
-            Ok(Self { device_enumerator })
+            Ok(Self {
+                device_enumerator,
+                app_handle: None,
+            })
         }
+    }
+
+    pub fn set_app_handle(&mut self, handle: tauri::AppHandle) {
+        self.app_handle = Some(handle);
     }
 
     /// デフォルトの再生デバイス（スピーカー等）を取得する
@@ -111,20 +124,41 @@ impl AudioManager {
                     if let Ok(control) =
                         session.cast::<windows::Win32::Media::Audio::IAudioSessionControl>()
                     {
-                        let listener: windows::Win32::Media::Audio::IAudioSessionEvents =
-                            SessionEventsListener { process_id: pid }.into();
-                        let _ = unsafe { control.RegisterAudioSessionNotification(&listener) };
+                        if let Some(handle) = &self.app_handle {
+                            let listener: windows::Win32::Media::Audio::IAudioSessionEvents =
+                                SessionEventsListener {
+                                    app_handle: handle.clone(),
+                                    process_id: pid,
+                                }
+                                .into();
+                            let _ = control.RegisterAudioSessionNotification(&listener);
+                        }
                     }
 
-                    // プロセス名を取得する
-                    let process_name =
-                        Self::get_process_name(pid).unwrap_or_else(|| "Unknown".to_string());
+                    // プロセス名とフルパスを取得する
+                    let (process_name, icon_base64) = if let Some(full_path) =
+                        Self::get_process_full_path(pid)
+                    {
+                        // アイコンと製品名を抽出
+                        let name = icon::extract_product_name(&full_path).unwrap_or_else(|| {
+                            if let Some(pos) = full_path.rfind('\\') {
+                                full_path[pos + 1..].to_string()
+                            } else {
+                                full_path.clone()
+                            }
+                        });
+                        let icon = icon::extract_icon_base64(&full_path);
+                        (name, icon)
+                    } else {
+                        ("Unknown".to_string(), None)
+                    };
 
                     sessions_info.push(AudioSessionInfo {
                         process_id: pid,
                         process_name,
                         volume: vol,
                         is_muted: mute.as_bool(),
+                        icon_base64,
                     });
                 }
             }
@@ -133,24 +167,24 @@ impl AudioManager {
         Ok(sessions_info)
     }
 
-    /// 指定された PID から実行ファイル名を取得するヘルパー関数
-    fn get_process_name(pid: u32) -> Option<String> {
+    /// 指定された PID から実行ファイルのフルパスを取得するヘルパー関数
+    fn get_process_full_path(pid: u32) -> Option<String> {
         unsafe {
-            // PROCESS_QUERY_INFORMATIONとPROCESS_VM_READ権限でプロセスを開く
-            let handle: HANDLE =
-                OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid).ok()?;
+            // PROCESS_QUERY_LIMITED_INFORMATION で十分 (QueryFullProcessImageNameW にはこれが必要)
+            let handle: HANDLE = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
 
-            let mut buffer = [0u16; MAX_PATH as usize];
-            let len = K32GetProcessImageFileNameW(handle, &mut buffer);
+            let mut buffer = [0u16; MAX_PATH as usize * 2];
+            let mut len = (MAX_PATH * 2) as u32;
+            let res = QueryFullProcessImageNameW(
+                handle,
+                PROCESS_NAME_WIN32,
+                windows::core::PWSTR(buffer.as_mut_ptr()),
+                &mut len,
+            );
             let _ = windows::Win32::Foundation::CloseHandle(handle);
 
-            if len > 0 {
-                // 返ってくるのはパス全体 (例: \\Device\\HarddiskVolume3\\Windows\\System32\\svchost.exe)
+            if res.is_ok() {
                 if let Ok(full_path) = String::from_utf16(&buffer[..len as usize]) {
-                    // 最後のバックスラッシュより後を抽出する
-                    if let Some(pos) = full_path.rfind('\\') {
-                        return Some(full_path[pos + 1..].to_string());
-                    }
                     return Some(full_path);
                 }
             }

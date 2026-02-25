@@ -3,6 +3,17 @@ use windows::{
     Win32::Media::Audio::{AudioSessionState, IAudioSessionEvents, IAudioSessionEvents_Impl},
 };
 
+use tauri::{AppHandle, Emitter};
+
+// フロントエンドへ送信するイベントのペイロード
+#[derive(Clone, serde::Serialize)]
+pub struct AudioEventPayload {
+    pub process_id: u32,
+    pub volume: Option<f32>,
+    pub mute: Option<bool>,
+    pub state: Option<String>,
+}
+
 /// 音量やミュート状態の変化を監視するイベントリスナー
 ///
 /// COMのコールバックを受け取り、Rust側のチャネルやTauriのアプリアンドルを通じて
@@ -11,8 +22,8 @@ use windows::{
 /// マクロがよしなに（安全に）自動生成してくれる。
 #[implement(IAudioSessionEvents)]
 pub struct SessionEventsListener {
-    // 将来的にはここにTauriのAppHandleやmpsc::Senderを持たせて、
-    // 状態が変わったよーというイベントをUI側に投げる
+    // Tauriのアプリアンドルを持たせて、イベントをUI側に投げる
+    pub app_handle: AppHandle,
     pub process_id: u32,
 }
 
@@ -39,8 +50,16 @@ impl IAudioSessionEvents_Impl for SessionEventsListener_Impl {
         newmute: windows::Win32::Foundation::BOOL,
         _eventcontext: *const windows::core::GUID,
     ) -> Result<()> {
-        // 音量・ミュートが変わった！という通知をここでフックする
-        // ※ ここはCOMのバックグラウンドスレッドで呼ばれるため、ブロックする処理は厳禁
+        // 音量・ミュートが変わった通知をフロントエンドへ飛ばす
+        let payload = AudioEventPayload {
+            process_id: self.process_id,
+            volume: Some(newvolume),
+            mute: Some(newmute.as_bool()),
+            state: None, // Volume change doesn't explicitly change Active/Inactive state here
+        };
+        // エラーを無視（UIが閉じた後なども呼ばれる可能性があるため）
+        let _ = self.app_handle.emit("audio-session-event", payload);
+
         println!(
             "VOL CHANGED: PID {}, Vol: {}, Mute: {:?}",
             self.process_id, newvolume, newmute
@@ -67,6 +86,21 @@ impl IAudioSessionEvents_Impl for SessionEventsListener_Impl {
     }
 
     fn OnStateChanged(&self, newstate: AudioSessionState) -> Result<()> {
+        let state_str = match newstate {
+            windows::Win32::Media::Audio::AudioSessionStateInactive => "Inactive",
+            windows::Win32::Media::Audio::AudioSessionStateActive => "Active",
+            windows::Win32::Media::Audio::AudioSessionStateExpired => "Expired",
+            _ => "Unknown",
+        };
+
+        let payload = AudioEventPayload {
+            process_id: self.process_id,
+            volume: None,
+            mute: None,
+            state: Some(state_str.to_string()),
+        };
+        let _ = self.app_handle.emit("audio-session-event", payload);
+
         // セッションがアクティブになった、期限切れになった、等の状態変更を通知
         println!(
             "STATE CHANGED: PID {}, State: {:?}",

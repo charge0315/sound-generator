@@ -37,4 +37,9 @@
 - **モデル同期**: Gemini 3.1 Pro への移行を検討中（Antigravity Protocol のコアエンジン更新）。
 - **Phase 2 完了**: `windows-rs` を用い、MTAスレッド上でのCOM初期化と `IAudioSessionManager2` / `ISimpleAudioVolume` によるリアルタイム音量制御機能のTauriコマンド統合を完了。
 - **課題クリア**: winit の STA メインスレッドとの競合を非同期スレッドへ分離することで解決。
-- **次フェーズ (Phase 3)**: Tailwind を使った Windows 11 ライクな UI スタイリングと `IAudioSessionEvents` のフロントエンドへのイベント送信に着手予定。
+### 🗓️ 2026-02-25: Phase 3 Completed (UI & Real-time Sync)
+- **Rust to React Sync**: `IAudioSessionEvents` のCOMコールバックを Tauri の `AppHandle` に連携し、イベントリスナーによる超低遅延なUI音量同期を実現。
+- **Fluent UI**: `window-vibrancy` による Mica/Acrylic 効果と、Tailwind CSSでのダークテーマ・グラスモーフィズムUIを実装。ReactのStateを最適化し、ポーリングレスに。
+### 🗓️ 2026-02-25: Phase 4 Kickoff (App Icons & Tray Flyout)
+- **次フェーズ要件**: アプリアイコンの動的抽出と、タスクトレイククリック時のフライアウトウィンドウ（EarTrumpet風の動作）の構築に着手。
+- **Per-App Audio Routing**: EarTrumpetのソースコードを解析し、Windowsの非公開API `IAudioPolicyConfigFactory` のRust (`windows-rs`) への移植を開始。現在はCOMのvtable直接バインディングにおけるコンパイルエラーを修正中。明日は引き続きこのインターフェースの実装とコマンド統合を行う予定。

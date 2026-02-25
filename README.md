@@ -28,12 +28,15 @@ cmd /c "call ""C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\A
 ## 🏗️ 開発ロードマップ
 1. [x] **Phase 1**: Tauri + React の基本構成とタスクトレイ常駐の実装。（2026-02-24 完了）
 2. [x] **Phase 2**: `windows-rs` を用いたオーディオセッションの列挙とボリューム制御ロジックの構築。（2026-02-25 完了）
-3. [/] **Phase 3**: UIのブラッシュアップと、スマホ入力セッションの特定・統合。
+3. [x] **Phase 3**: UIのブラッシュアップとフロントエンドへのイベント同期。（2026-02-25 完了）
+   - Tailwindと `window-vibrancy` によるMica効果のフル実装
+   - `IAudioSessionEvents` から Tauriイベントを用いた超低遅延フロントエンド同期
+4. [/] **Phase 4**: ネイティブUI体験の強化とプロセスアイコン抽出
 
-## 📝 次回以降のタスク (Phase 3)
-- [ ] **Windows 11 スタイルの UI レインフォース・プロトタイプ作成**
-  - TailwindCSS を活用した Mica/Acrylic 効果のシミュレーション、モダンなスライダー実装
-- [ ] **リアルタイムイベントのUI反映**
-  - アプリ側や Windows ミキサーでの音量・ミュート変更 (`IAudioSessionEvents`) を Tauri イベント経由で React へ即座に反映させる
-- [ ] **プロセスのアイコン取得連携**
-  - プロセスパスからアイコンを抽出し、UI 上に表示するロジック (`Win32_UI_Shell`) の追加
+## 📝 次回以降のタスク (Phase 4: ネイティブ化とアイコン抽出)
+- [ ] **Windows EXEsからのアプリアイコン自動抽出 (`SHGetFileInfo` / `ExtractIcon`)**
+  - セッションのPIDから実行可能ファイルのパスを割り出し、高解像度のアイコンをBase64またはローカル画像URIとして抽出し、フロントエンドへ送る。現在の一時的な文字アイコンを本来のアプリアイコンに置き換える。
+- [ ] **アプリごとの音声ルーティング (Per-App Audio Routing)**
+  - EarTrumpetのC#実装を解析し、非公開COMインターフェース `IAudioPolicyConfigFactory` のRustバインディングを実装中。現在、`cargo check` のCOM vtable周りのコンパイルエラーを解決中。
+- [ ] **タスクトレイ(システムトレイ)からのポップアップ（フライアウト）化**
+  - EarTrumpetのように、タスクトレイアイコンをクリックした際にカーソル位置（右下）付近にウィンドウが表示され、フォーカスが外れたら自動で隠れる「フライアウト」動作を実装し、ネイティブなWindowsミキサーの代替品としてのUXを完成させる。
