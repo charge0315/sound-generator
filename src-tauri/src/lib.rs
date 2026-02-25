@@ -1,8 +1,71 @@
+use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+mod audio;
+use audio::{init_com, AudioManager, AudioSessionInfo};
+
+// AudioManagerはスレッドセーフではないCOMインターフェースを持つため、
+// TauriのStateとして持たせる場合はMutex等で保護する必要がある。
+pub struct AudioState(Mutex<Option<AudioManager>>);
+
+impl AudioState {
+    fn with_manager<F, R>(&self, f: F) -> Result<R, String>
+    where
+        F: FnOnce(&AudioManager) -> Result<R, String>,
+    {
+        // コマンドを実行するスレッド（Tauriのバックグラウンドスレッド）でCOMをMTAとして初期化
+        let _ = init_com();
+        let mut guard = self.0.lock().map_err(|_| "Deadlock".to_string())?;
+        if guard.is_none() {
+            *guard = AudioManager::new().ok();
+        }
+        if let Some(manager) = guard.as_ref() {
+            f(manager)
+        } else {
+            Err("Failed to initialize AudioManager".to_string())
+        }
+    }
+}
+
+#[tauri::command]
+fn get_audio_sessions(
+    state: tauri::State<'_, AudioState>,
+) -> Result<Vec<AudioSessionInfo>, String> {
+    state.with_manager(|manager| {
+        manager
+            .get_sessions()
+            .map_err(|e| format!("Failed to get sessions: {}", e))
+    })
+}
+
+#[tauri::command]
+fn set_session_volume(
+    process_id: u32,
+    volume: f32,
+    state: tauri::State<'_, AudioState>,
+) -> Result<(), String> {
+    state.with_manager(|manager| {
+        manager
+            .set_session_volume(process_id, volume)
+            .map_err(|e| format!("Failed to set volume: {}", e))
+    })
+}
+
+#[tauri::command]
+fn set_session_mute(
+    process_id: u32,
+    mute: bool,
+    state: tauri::State<'_, AudioState>,
+) -> Result<(), String> {
+    state.with_manager(|manager| {
+        manager
+            .set_session_mute(process_id, mute)
+            .map_err(|e| format!("Failed to set mute: {}", e))
+    })
+}
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
@@ -49,7 +112,13 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet])
+        .manage(AudioState(Mutex::new(None)))
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            get_audio_sessions,
+            set_session_volume,
+            set_session_mute
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
