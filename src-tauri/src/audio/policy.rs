@@ -2,11 +2,15 @@ use std::ffi::c_void;
 use windows::core::{IUnknown, HRESULT, HSTRING};
 use windows::Win32::System::WinRT::RoGetActivationFactory;
 
-// Instead of `#[windows::core::interface]` which fails due to missing `IUnknown_Vtbl`,
-// we will manually structure the COM vtable and interop.
-// A COM interface pointer is basically a pointer to a pointer to a vtable.
+// --- IAudioPolicyConfigFactory インターフェースのハック宣言 ---
+// Windows上で「プロセスごとに異なるオーディオ出力先を割り当てる（Audio Routing）」ためのAPI群は、
+// EarTrumpet等のアプリが利用しているものの、Windows SDK上で公式にヘッダファイルとして公開されていない「非公開API（Undocumented API）」である。
+// そのため `windows-rs`（0.58等）には対応するインターフェース生成マクロが存在しないか不完全である。
+// ここでは、COMの内部構造（VTable=関数ポインタの配列）のメモリレイアウトをRustの struct として直書き（ハードコーディング）し、
+// ポインタをC言語のように直接操作・キャストすることで、強引に非公開APIを呼び出せるようにしている。
 
 #[repr(C)]
+#[allow(non_snake_case)]
 pub struct IAudioPolicyConfigFactoryVtable {
     pub QueryInterface: unsafe extern "system" fn(
         this: *mut c_void,

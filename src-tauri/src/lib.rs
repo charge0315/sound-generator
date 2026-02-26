@@ -8,7 +8,10 @@ mod audio;
 use audio::{init_com, AudioManager, AudioSessionInfo};
 
 // AudioManagerはスレッドセーフではないCOMインターフェースを持つため、
-// TauriのStateとして持たせる場合はMutex等で保護する必要がある。
+// AudioManagerは、WindowsのオーディオAPI (WASAPI / EndpointVolume) のCOMオブジェクトの参照を保持する。
+// COMの世界ではスレッドの「アパートメント(STA/MTA)」の概念があり、RustのようにSend/Syncを
+// 単純にスレッド間で渡すことが許されないことが多いが、MTAとして初期化した上でMutexでラップすることで
+// Tauriのコマンド（バックグラウンドスレッドプール）から安全に呼び出せるようにハックしている。
 pub struct AudioState(Mutex<Option<AudioManager>>);
 
 impl AudioState {
@@ -16,7 +19,8 @@ impl AudioState {
     where
         F: FnOnce(&AudioManager) -> Result<R, String>,
     {
-        // コマンドを実行するスレッド（Tauriのバックグラウンドスレッド）でCOMをMTAとして初期化
+        // どのスレッドから呼ばれても安全にCOMを操作できるよう、毎回 MTA (Multi-Threaded Apartment) としてCOMを初期化する。
+        // S_FALSE（既に初期化済み）が返ることもあるが、気にしない。
         let _ = init_com();
         let mut guard = self.0.lock().map_err(|_| "Deadlock".to_string())?;
         if guard.is_none() {
@@ -73,6 +77,32 @@ fn set_session_mute(
 }
 
 #[tauri::command]
+fn set_audio_routing(
+    app: tauri::AppHandle,
+    process_id: u32,
+    device_id: String,
+    state: tauri::State<'_, AudioState>,
+) -> Result<(), String> {
+    state.with_manager(&app, |manager| {
+        manager
+            .set_audio_routing(process_id, &device_id)
+            .map_err(|e| format!("Failed to set audio routing: {}", e))
+    })
+}
+
+#[tauri::command]
+fn get_audio_devices(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AudioState>,
+) -> Result<Vec<audio::AudioDeviceInfo>, String> {
+    state.with_manager(&app, |manager| {
+        manager
+            .get_audio_devices()
+            .map_err(|e| format!("Failed to get audio devices: {}", e))
+    })
+}
+
+#[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
@@ -82,7 +112,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .on_window_event(|window, event| {
-            // ウィンドウからフォーカスが外れたとき（他の場所をクリックしたとき）に自動で隠す
+            // ネイティブのフライアウト（EarTrumpetやWindows標準のWi-Fiメニューなど）特有のUXを再現するための処理。
+            // ユーザーがウィンドウの外をクリックしてフォーカスが外れた瞬間（Focused(false)）に
+            // 即座にウィンドウを隠すことで、あたかもポップアップメニューのように振る舞わせる。
             if let WindowEvent::Focused(false) = event {
                 let _ = window.hide();
             }
@@ -117,26 +149,31 @@ pub fn run() {
                     {
                         let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("main") {
-                            // フライアウト動作のため、クリック位置の近くにウィンドウを移動する
+                            // --- タスクトレイ フライアウト配置アルゴリズム ---
+                            // EarTrumpet等の常駐アプリのように、画面中央ではなく「クリックしたトレイアイコンの真上」に
+                            // ウィンドウを表示するための計算を行う。
+
                             let window_size = window.outer_size().unwrap_or_default();
 
-                            // タスクトレイアイコンの中心からウィンドウ幅の半分だけ左にずらし、上にウィンドウ高さ分だけ移動する
+                            // 1. タスクトレイアイコンのモニター上の物理座標を取得
                             let (icon_x, icon_y) = match rect.position {
                                 tauri::Position::Physical(p) => (p.x as i32, p.y as i32),
                                 tauri::Position::Logical(p) => (p.x as i32, p.y as i32),
                             };
 
-                            // 画面のスケールファクタを取得（マルチモニター対応のためウィンドウ等から）
+                            // マルチモニター環境等でスケーリング（150%など）が異なる場合に対応するため、
+                            // ウィンドウが所属しているモニターのスケールを乗じる。
                             let scale_factor = window.scale_factor().unwrap_or(1.0);
                             let width = (window_size.width as f64 / scale_factor) as i32;
                             let height = (window_size.height as f64 / scale_factor) as i32;
 
-                            // x 座標: アイコンの中心から左へずらす。右端切れを防ぐ
+                            // 2. ウィンドウをアイコンの中央にアラインメントする（x軸）
                             let mut x = icon_x - (width / 2);
-                            // y 座標: アイコンの上（タスクバーの上）に配置する
-                            let mut y = icon_y - height - 40; // 余裕を持たせる
+                            // 3. ウィンドウをタスクバーの上（y軸）に配置する。
+                            // -40はタスクバーの厚みを考慮した余白（ハードコーディングだが実用上は概ね機能する）。
+                            let mut y = icon_y - height - 40;
 
-                            // 位置の補正 (簡易的)
+                            // 画面外に飛び出さないための最低限のクリッピング
                             if x < 0 {
                                 x = 0;
                             }
@@ -157,12 +194,13 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // メインウィンドウにエフェクトを適用する
+            // フロントエンド側の背景透過と組み合わせて、Windowsネイティブの「すりガラス」効果を適用する。
             if let Some(window) = app.get_webview_window("main") {
                 #[cfg(target_os = "windows")]
                 {
-                    // alwaysOnTop や skipTaskbar なウィンドウの場合、Micaは無効化されるケースが多いため、
-                    // 強制的に Acrylic 効果 (より深いすりガラス) を適用し、背景透過を確実にする
+                    // alwaysOnTop や skipTaskbar なウィンドウの場合、OSの制約により Mica が効かない（フォールバックされる）ケースが多いため、
+                    // ここでは強制的に Acrylic 効果 (より深く透過するすりガラス) を適用している。
+                    // RGB/Альファ値の調整でダークテーマに馴染ませている。
                     let _ = apply_acrylic(&window, Some((18, 18, 18, 160)));
                 }
             }
@@ -174,7 +212,9 @@ pub fn run() {
             greet,
             get_audio_sessions,
             set_session_volume,
-            set_session_mute
+            set_session_mute,
+            set_audio_routing,
+            get_audio_devices
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

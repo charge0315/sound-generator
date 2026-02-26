@@ -45,6 +45,12 @@ pub struct AudioSessionInfo {
     pub icon_base64: Option<String>,
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct AudioDeviceInfo {
+    pub id: String,
+    pub name: String,
+}
+
 pub struct AudioManager {
     device_enumerator: IMMDeviceEnumerator,
     app_handle: Option<tauri::AppHandle>,
@@ -99,7 +105,10 @@ impl AudioManager {
 
                 if let Ok(control2) = control_query {
                     let pid = control2.GetProcessId()?;
-                    // PID 0 はシステム音なのでスキップまたは特別扱い
+
+                    // Windowsのシステム音（システム設定のサウンドなど）は PID 0 として認識される。
+                    // ユーザーが個別に制御したい対象は「一般アプリケーション」であるため、
+                    // システム全体に影響したりノイズになる PID 0 はUIに反映させず除外する。
                     if pid == 0 {
                         continue;
                     }
@@ -135,7 +144,11 @@ impl AudioManager {
                         }
                     }
 
-                    // プロセス名とフルパスを取得する
+                    // UI側で「どのアプリの音量か？」を直感的に判別可能にするため、
+                    // セッション(PID)に対応する実行ファイル(.exe)のフルパスを取得し、
+                    // そこから「製品名(Product Name)」と「内包されているアプリアイコン」を直接抽出する。
+                    // アイコンは一時ファイルに保存したりせず、インメモリでBase64エンコードして直接Reactへ送ることで
+                    // ディスクI/Oを抑えつつ高速にレンダリングさせている。
                     let (process_name, icon_base64) = if let Some(full_path) =
                         Self::get_process_full_path(pid)
                     {
@@ -150,6 +163,7 @@ impl AudioManager {
                         let icon = icon::extract_icon_base64(&full_path);
                         (name, icon)
                     } else {
+                        // 権限不足等でフルパスが取得できないプロセス（システム権限など）に対するフォールバック
                         ("Unknown".to_string(), None)
                     };
 
@@ -237,5 +251,72 @@ impl AudioManager {
         // PIDが見つからなかった、またはエラーだった場合は現状とりあえずOkを返すか、独自エラーにする
         // ここではAPIとしてエラーにせず、単に何も起きなかったのと同じ扱いにしている
         Ok(())
+    }
+
+    /// 特定のプロセスのオーディオ出力先をルーティング（変更）する
+    pub fn set_audio_routing(&self, target_pid: u32, device_id: &str) -> Result<()> {
+        let factory = policy::AudioPolicyConfigFactory::new()?;
+        factory.set_persisted_default_audio_endpoint(target_pid, device_id)?;
+        Ok(())
+    }
+
+    /// 利用可能なオーディオ出力デバイスのリストを取得する
+    pub fn get_audio_devices(&self) -> Result<Vec<AudioDeviceInfo>> {
+        let mut devices = Vec::new();
+        unsafe {
+            use windows::Win32::Devices::Properties::DEVPKEY_Device_FriendlyName;
+            use windows::Win32::Media::Audio::eRender;
+            use windows::Win32::Media::Audio::DEVICE_STATE_ACTIVE;
+            use windows::Win32::System::Com::StructuredStorage::PropVariantClear;
+            use windows::Win32::System::Com::STGM_READ;
+            use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+
+            let collection = self
+                .device_enumerator
+                .EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)?;
+            let count = collection.GetCount()?;
+
+            for i in 0..count {
+                let device = collection.Item(i)?;
+
+                // Get the ID
+                let id_pwstr = device.GetId()?;
+                let id_string = id_pwstr.to_string().unwrap_or_default();
+                windows::Win32::System::Com::CoTaskMemFree(Some(id_pwstr.as_ptr() as _));
+
+                // オーディオデバイスから「ユーザーが理解できるフレンドリ名（例："Realtek High Definition Audio"）」を取り出す。
+                // 内部的には IPropertyStore に対して DEVPKEY_Device_FriendlyName を要求する仕組みだが、
+                // COMの汎用型である PROPVARIANT で返ってくるため、Rust側で文字列として安全にデコードして取り出す必要がある。
+                let store: IPropertyStore = device.OpenPropertyStore(STGM_READ)?;
+                let prop_variant =
+                    store.GetValue(&DEVPKEY_Device_FriendlyName as *const _ as *const _)?;
+
+                let name = {
+                    let raw = prop_variant.as_raw();
+                    if raw.Anonymous.Anonymous.vt == 31 {
+                        // VT_LPWSTR
+                        let ptr = raw.Anonymous.Anonymous.Anonymous.pwszVal;
+                        if ptr.is_null() {
+                            "Unknown Device".to_string()
+                        } else {
+                            let mut len = 0;
+                            while *ptr.add(len) != 0 {
+                                len += 1;
+                            }
+                            let slice = std::slice::from_raw_parts(ptr, len);
+                            String::from_utf16_lossy(slice)
+                        }
+                    } else {
+                        "Unknown Device".to_string()
+                    }
+                };
+
+                devices.push(AudioDeviceInfo {
+                    id: id_string,
+                    name,
+                });
+            }
+        }
+        Ok(devices)
     }
 }
