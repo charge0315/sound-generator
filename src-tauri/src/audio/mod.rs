@@ -17,6 +17,7 @@ use windows::{
             OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
             PROCESS_QUERY_LIMITED_INFORMATION,
         },
+        System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED},
     },
 };
 
@@ -26,12 +27,10 @@ use windows::{
 /// 並行して動作する可能性が高いため、マルチスレッドアパートメント(MTA)として初期化する。
 pub fn init_com() -> Result<()> {
     unsafe {
-        // CoInitializeExは、現在のスレッドのCOMライブラリを初期化する
-        // MTAを指定し、スレッドセーフなCOMオブジェクトの呼び出しを許可する
-        let _ = CoInitializeEx(Some(ptr::null()), COINIT_MULTITHREADED);
+        // WinRT の API（RoGetActivationFactory等）を利用するためには RoInitialize が必要です。
+        // RoInitialize(RO_INIT_MULTITHREADED) は内部的に CoInitializeEx(COINIT_MULTITHREADED) 相当も兼ねます。
+        let _ = RoInitialize(RO_INIT_MULTITHREADED);
     }
-    // CoInitializeExが S_FALSE を返すことがあるが（既に初期化済みなど）、
-    // これはエラーではないため、厳密なエラーチェックは省略または許容する
     Ok(())
 }
 
@@ -43,6 +42,7 @@ pub struct AudioSessionInfo {
     pub volume: f32,
     pub is_muted: bool,
     pub icon_base64: Option<String>,
+    pub device_id: String, // どの出力デバイスに紐づいているかを示す一意のID
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -87,93 +87,121 @@ impl AudioManager {
         }
     }
 
-    /// 現在アクティブな全オーディオセッションの情報を列挙して返す
+    /// すべてのアクティブな出力デバイスを取得するヘルパー関数
+    fn get_all_active_render_devices(
+        &self,
+    ) -> Result<windows::Win32::Media::Audio::IMMDeviceCollection> {
+        unsafe {
+            use windows::Win32::Media::Audio::DEVICE_STATE_ACTIVE;
+            self.device_enumerator
+                .EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)
+        }
+    }
+
+    /// 現在アクティブな全スピーカー（出力デバイス）から、全オーディオセッションの情報を列挙して返す
     pub fn get_sessions(&self) -> Result<Vec<AudioSessionInfo>> {
         let mut sessions_info = Vec::new();
 
         unsafe {
-            let device = self.get_default_render_device()?;
-            // IAudioSessionManager2を取得してセッションを列挙する
-            let session_manager: IAudioSessionManager2 = device.Activate(CLSCTX_ALL, None)?;
-            let enumerator: IAudioSessionEnumerator = session_manager.GetSessionEnumerator()?;
+            // アクティブなすべてのオーディオレンダリングデバイスを取得
+            let collection = self.get_all_active_render_devices()?;
+            let device_count = collection.GetCount()?;
 
-            let count = enumerator.GetCount()?;
+            for d in 0..device_count {
+                let device = collection.Item(d)?;
+                let id_pwstr = device.GetId()?;
+                let device_id = id_pwstr.to_string().unwrap_or_default();
+                windows::Win32::System::Com::CoTaskMemFree(Some(id_pwstr.as_ptr() as _));
 
-            for i in 0..count {
-                let session = enumerator.GetSession(i)?;
-                let control_query: Result<IAudioSessionControl2> = session.cast();
+                // 各デバイスの IAudioSessionManager2 を取得してセッションを列挙する
+                let session_manager: IAudioSessionManager2 = device.Activate(CLSCTX_ALL, None)?;
+                let enumerator: IAudioSessionEnumerator = session_manager.GetSessionEnumerator()?;
 
-                if let Ok(control2) = control_query {
-                    let pid = control2.GetProcessId()?;
+                let count = enumerator.GetCount()?;
 
-                    // Windowsのシステム音（システム設定のサウンドなど）は PID 0 として認識される。
-                    // ユーザーが個別に制御したい対象は「一般アプリケーション」であるため、
-                    // システム全体に影響したりノイズになる PID 0 はUIに反映させず除外する。
-                    if pid == 0 {
-                        continue;
-                    }
+                for i in 0..count {
+                    let session = enumerator.GetSession(i)?;
+                    let control_query: Result<IAudioSessionControl2> = session.cast();
 
-                    // 音量情報の取得 (ISimpleAudioVolume)
-                    let simple_volume: Result<ISimpleAudioVolume> = session.cast();
-                    let (mut vol, mut mute) = (0.0, windows::Win32::Foundation::BOOL::default());
+                    if let Ok(control2) = &control_query {
+                        let pid = control2.GetProcessId()?;
 
-                    if let Ok(sv) = &simple_volume {
-                        if let Ok(v) = sv.GetMasterVolume() {
-                            vol = v;
+                        // Windowsのシステム音（システム設定のサウンドなど）は PID 0 として認識される。
+                        // ユーザーが個別に制御したい対象は「一般アプリケーション」であるため、
+                        // システム全体に影響したりノイズになる PID 0 はUIに反映させず除外する。
+                        if pid == 0 {
+                            continue;
                         }
-                        if let Ok(m) = sv.GetMute() {
-                            mute = m;
-                        }
-                    }
 
-                    use events::SessionEventsListener;
-                    // イベントリスナーの登録 (オプション)
-                    // TODO: 本格的にイベントをUIへ送る場合は、このリスナーインスタンスを保持し続け、
-                    // Unregisterする必要があります。今回は試験的に登録だけおこないます。
-                    if let Ok(control) =
-                        session.cast::<windows::Win32::Media::Audio::IAudioSessionControl>()
-                    {
-                        if let Some(handle) = &self.app_handle {
-                            let listener: windows::Win32::Media::Audio::IAudioSessionEvents =
-                                SessionEventsListener {
-                                    app_handle: handle.clone(),
-                                    process_id: pid,
-                                }
-                                .into();
-                            let _ = control.RegisterAudioSessionNotification(&listener);
+                        // セッションの状態を確認 (すでに終了してInactive等になっている場合はスキップ)
+                        // Inactiveなセッションも残ることがあるが、UIとしては現在アクティブなもののみ表示したい場合が多い。
+                        let state = control2.GetState()?;
+                        if state == windows::Win32::Media::Audio::AudioSessionStateExpired {
+                            continue;
                         }
-                    }
 
-                    // UI側で「どのアプリの音量か？」を直感的に判別可能にするため、
-                    // セッション(PID)に対応する実行ファイル(.exe)のフルパスを取得し、
-                    // そこから「製品名(Product Name)」と「内包されているアプリアイコン」を直接抽出する。
-                    // アイコンは一時ファイルに保存したりせず、インメモリでBase64エンコードして直接Reactへ送ることで
-                    // ディスクI/Oを抑えつつ高速にレンダリングさせている。
-                    let (process_name, icon_base64) = if let Some(full_path) =
-                        Self::get_process_full_path(pid)
-                    {
-                        // アイコンと製品名を抽出
-                        let name = icon::extract_product_name(&full_path).unwrap_or_else(|| {
-                            if let Some(pos) = full_path.rfind('\\') {
-                                full_path[pos + 1..].to_string()
-                            } else {
-                                full_path.clone()
+                        // 音量情報の取得 (ISimpleAudioVolume)
+                        let simple_volume: Result<ISimpleAudioVolume> = session.cast();
+                        let (mut vol, mut mute) =
+                            (0.0, windows::Win32::Foundation::BOOL::default());
+
+                        if let Ok(sv) = &simple_volume {
+                            if let Ok(v) = sv.GetMasterVolume() {
+                                vol = v;
                             }
-                        });
-                        let icon = icon::extract_icon_base64(&full_path);
-                        (name, icon)
-                    } else {
-                        // 権限不足等でフルパスが取得できないプロセス（システム権限など）に対するフォールバック
-                        ("Unknown".to_string(), None)
-                    };
+                            if let Ok(m) = sv.GetMute() {
+                                mute = m;
+                            }
+                        }
 
-                    sessions_info.push(AudioSessionInfo {
-                        process_id: pid,
-                        process_name,
-                        volume: vol,
-                        is_muted: mute.as_bool(),
-                        icon_base64,
-                    });
+                        use events::SessionEventsListener;
+                        // イベントリスナーの登録 (オプション)
+                        // TODO: 本格的にイベントをUIへ送る場合は、このリスナーインスタンスを保持し続け、
+                        // Unregisterする必要があります。今回は試験的に登録だけおこないます。
+                        if let Ok(control) =
+                            session.cast::<windows::Win32::Media::Audio::IAudioSessionControl>()
+                        {
+                            if let Some(handle) = &self.app_handle {
+                                let listener: windows::Win32::Media::Audio::IAudioSessionEvents =
+                                    SessionEventsListener {
+                                        app_handle: handle.clone(),
+                                        process_id: pid,
+                                    }
+                                    .into();
+                                let _ = control.RegisterAudioSessionNotification(&listener);
+                            }
+                        }
+
+                        // UI側で「どのアプリの音量か？」を直感的に判別可能にするため、
+                        // セッション(PID)に対応する実行ファイル(.exe)のフルパスを取得し、
+                        // そこから「製品名(Product Name)」と「内包されているアプリアイコン」を直接抽出する。
+                        let (process_name, icon_base64) =
+                            if let Some(full_path) = Self::get_process_full_path(pid) {
+                                // アイコンと製品名を抽出
+                                let name =
+                                    icon::extract_product_name(&full_path).unwrap_or_else(|| {
+                                        if let Some(pos) = full_path.rfind('\\') {
+                                            full_path[pos + 1..].to_string()
+                                        } else {
+                                            full_path.clone()
+                                        }
+                                    });
+                                let icon = icon::extract_icon_base64(&full_path);
+                                (name, icon)
+                            } else {
+                                // 権限不足等でフルパスが取得できないプロセス
+                                ("Unknown".to_string(), None)
+                            };
+
+                        sessions_info.push(AudioSessionInfo {
+                            process_id: pid,
+                            process_name,
+                            volume: vol,
+                            is_muted: mute.as_bool(),
+                            icon_base64,
+                            device_id: device_id.clone(),
+                        });
+                    }
                 }
             }
         }
@@ -226,22 +254,28 @@ impl AudioManager {
         F: Fn(&ISimpleAudioVolume) -> Result<()>,
     {
         unsafe {
-            let device = self.get_default_render_device()?;
-            let session_manager: IAudioSessionManager2 = device.Activate(CLSCTX_ALL, None)?;
-            let enumerator: IAudioSessionEnumerator = session_manager.GetSessionEnumerator()?;
+            // 対象のPIDを持つセッションを探すため、すべてのデバイスを走査する
+            let collection = self.get_all_active_render_devices()?;
+            let device_count = collection.GetCount()?;
 
-            let count = enumerator.GetCount()?;
+            for d in 0..device_count {
+                let device = collection.Item(d)?;
+                let session_manager: IAudioSessionManager2 = device.Activate(CLSCTX_ALL, None)?;
+                let enumerator: IAudioSessionEnumerator = session_manager.GetSessionEnumerator()?;
 
-            for i in 0..count {
-                let session = enumerator.GetSession(i)?;
-                let control_query: Result<IAudioSessionControl2> = session.cast();
+                let count = enumerator.GetCount()?;
 
-                if let Ok(control2) = &control_query {
-                    let pid = control2.GetProcessId()?;
-                    if pid == target_pid {
-                        let simple_volume: Result<ISimpleAudioVolume> = session.cast();
-                        if let Ok(sv) = &simple_volume {
-                            return action(sv);
+                for i in 0..count {
+                    let session = enumerator.GetSession(i)?;
+                    let control_query: Result<IAudioSessionControl2> = session.cast();
+
+                    if let Ok(control2) = &control_query {
+                        let pid = control2.GetProcessId()?;
+                        if pid == target_pid {
+                            let simple_volume: Result<ISimpleAudioVolume> = session.cast();
+                            if let Ok(sv) = &simple_volume {
+                                return action(sv);
+                            }
                         }
                     }
                 }

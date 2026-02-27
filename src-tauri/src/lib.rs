@@ -109,14 +109,21 @@ fn greet(name: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .on_window_event(|window, event| {
-            // ネイティブのフライアウト（EarTrumpetやWindows標準のWi-Fiメニューなど）特有のUXを再現するための処理。
-            // ユーザーがウィンドウの外をクリックしてフォーカスが外れた瞬間（Focused(false)）に
-            // 即座にウィンドウを隠すことで、あたかもポップアップメニューのように振る舞わせる。
-            if let WindowEvent::Focused(false) = event {
-                let _ = window.hide();
+            match event {
+                // Focus out logic temporarily disabled for dragging
+                // WindowEvent::Focused(false) => {
+                //     let _ = window.hide();
+                // }
+                WindowEvent::CloseRequested { api, .. } => {
+                    // Prevent the window from completely closing (which might cause the app to exit)
+                    // Instead, just hide it.
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
+                _ => {}
             }
         })
         .setup(|app| {
@@ -132,10 +139,8 @@ pub fn run() {
                         app.exit(0);
                     }
                     "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                        use tauri::Emitter;
+                        let _ = app.emit("tray_menu_show", ());
                     }
                     _ => {}
                 })
@@ -143,53 +148,36 @@ pub fn run() {
                     if let TrayIconEvent::Click {
                         button: tauri::tray::MouseButton::Left,
                         button_state: tauri::tray::MouseButtonState::Up,
-                        rect,
                         ..
                     } = event
                     {
                         let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            // --- タスクトレイ フライアウト配置アルゴリズム ---
-                            // EarTrumpet等の常駐アプリのように、画面中央ではなく「クリックしたトレイアイコンの真上」に
-                            // ウィンドウを表示するための計算を行う。
 
-                            let window_size = window.outer_size().unwrap_or_default();
-
-                            // 1. タスクトレイアイコンのモニター上の物理座標を取得
-                            let (icon_x, icon_y) = match rect.position {
-                                tauri::Position::Physical(p) => (p.x as i32, p.y as i32),
-                                tauri::Position::Logical(p) => (p.x as i32, p.y as i32),
-                            };
-
-                            // マルチモニター環境等でスケーリング（150%など）が異なる場合に対応するため、
-                            // ウィンドウが所属しているモニターのスケールを乗じる。
-                            let scale_factor = window.scale_factor().unwrap_or(1.0);
-                            let width = (window_size.width as f64 / scale_factor) as i32;
-                            let height = (window_size.height as f64 / scale_factor) as i32;
-
-                            // 2. ウィンドウをアイコンの中央にアラインメントする（x軸）
-                            let mut x = icon_x - (width / 2);
-                            // 3. ウィンドウをタスクバーの上（y軸）に配置する。
-                            // -40はタスクバーの厚みを考慮した余白（ハードコーディングだが実用上は概ね機能する）。
-                            let mut y = icon_y - height - 40;
-
-                            // 画面外に飛び出さないための最低限のクリッピング
-                            if x < 0 {
-                                x = 0;
+                        let mut point = windows::Win32::Foundation::POINT { x: 0, y: 0 };
+                        let (icon_x, icon_y) = unsafe {
+                            if windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut point)
+                                .is_ok()
+                            {
+                                (point.x, point.y)
+                            } else {
+                                (0, 0)
                             }
-                            if y < 0 {
-                                y = 0;
-                            }
+                        };
 
-                            let pos = PhysicalPosition::new(
-                                (x as f64 * scale_factor) as i32,
-                                (y as f64 * scale_factor) as i32,
-                            );
-                            let _ = window.set_position(tauri::Position::Physical(pos));
-
-                            let _ = window.show();
-                            let _ = window.set_focus();
+                        #[derive(serde::Serialize, Clone)]
+                        struct TrayPos {
+                            x: i32,
+                            y: i32,
                         }
+
+                        use tauri::Emitter;
+                        let _ = app.emit(
+                            "tray_click_left",
+                            TrayPos {
+                                x: icon_x,
+                                y: icon_y,
+                            },
+                        );
                     }
                 })
                 .build(app)?;
@@ -216,6 +204,13 @@ pub fn run() {
             set_audio_routing,
             get_audio_devices
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|_app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+            // Keep the app running in the background for the tray icon
+            api.prevent_exit();
+        }
+    });
 }
