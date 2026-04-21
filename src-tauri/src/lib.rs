@@ -103,7 +103,15 @@ fn get_audio_devices(
 }
 
 #[tauri::command]
+fn set_window_position(window: tauri::Window, x: i32, y: i32) -> Result<(), String> {
+    window
+        .set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn greet(name: &str) -> String {
+
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
@@ -202,7 +210,8 @@ pub fn run() {
             set_session_volume,
             set_session_mute,
             set_audio_routing,
-            get_audio_devices
+            get_audio_devices,
+            set_window_position
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

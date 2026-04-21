@@ -32,7 +32,36 @@ function App() {
     fetchSessions();
     fetchDevices();
 
-    const unlisten = listen<AudioEventPayload>("audio-session-event", (event: Event<AudioEventPayload>) => {
+    // トレイアイコン左クリック時のイベントをリッスン
+    const unlistenTray = listen<any>("tray_click_left", async (event) => {
+      console.log("Tray Click Event Received:", event.payload);
+      
+      const isVisible = await appWindow.isVisible();
+      if (isVisible) {
+        await appWindow.hide();
+      } else {
+        // ウィンドウをトレイアイコン付近に配置して表示
+        // 本来はタスクバーの位置（上下左右）やモニター解像度を考慮して
+        // オフセット計算をすべきだが、まずは簡易的にクリック座標付近へ移動させる。
+        // ※ logicalPosition ではなく physicalPosition を使うケースがあるため注意
+        
+        // ウィンドウサイズを取得 (tauri.conf.json に合わせる)
+        const width = 360;
+        const height = 500;
+        
+        // クリックされた座標 (event.payload.x, y) は物理座標。
+        // Tauriの setPosition もデフォルトで物理座標を扱う。
+        // タスクバーが下にある場合、xはアイコン中心、yはアイコンの上端に合わせる。
+        const targetX = event.payload.x - (width / 2);
+        const targetY = event.payload.y - height - 10; // 10px ほど浮かせる
+
+        await invoke("set_window_position", { x: targetX, y: targetY });
+        await appWindow.show();
+        await appWindow.setFocus();
+      }
+    });
+
+    const unlistenAudio = listen<AudioEventPayload>("audio-session-event", (event: Event<AudioEventPayload>) => {
       console.log("Audio Event Received:", event.payload);
 
       setSessions((prevSessions) => {

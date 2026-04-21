@@ -40,6 +40,10 @@
 ### 🗓️ 2026-02-25: Phase 3 Completed (UI & Real-time Sync)
 - **Rust to React Sync**: `IAudioSessionEvents` のCOMコールバックを Tauri の `AppHandle` に連携し、イベントリスナーによる超低遅延なUI音量同期を実現。
 - **Fluent UI**: `window-vibrancy` による Mica/Acrylic 効果と、Tailwind CSSでのダークテーマ・グラスモーフィズムUIを実装。ReactのStateを最適化し、ポーリングレスに。
-### 🗓️ 2026-02-25: Phase 4 Kickoff (App Icons & Tray Flyout)
-- **次フェーズ要件**: アプリアイコンの動的抽出と、タスクトレイククリック時のフライアウトウィンドウ（EarTrumpet風の動作）の構築に着手。
-- **Per-App Audio Routing**: EarTrumpetのソースコードを解析し、Windowsの非公開API `IAudioPolicyConfigFactory` のRust (`windows-rs`) への移植を開始。現在はCOMのvtable直接バインディングにおけるコンパイルエラーを修正中。明日は引き続きこのインターフェースの実装とコマンド統合を行う予定。
+### 🗓️ 2026-04-21: Phase 4 Completed (Audio Routing & Flyout)
+- **VTable Alignment**: EarTrumpetのソースを再解析し、Windows 11 (21H2+) 対応の正しいVTableレイアウト (Index 25) を `policy.rs` に実装。
+- **Modern COM Binding**: `windows_core::interface` マクロを導入し、型安全かつ可読性の高い非公開APIバインディングへ刷新。
+- **Tray Flyout**: トレイアイコンのクリック座標 (x, y) をフロントエンドへ飛ばし、ウィンドウ位置を自動計算して表示する `set_window_position` 機能を実装。
+- **Fluid UX**: ウィンドウサイズの同期と、クリック時のスムーズな表示/非表示（トグル動作）を実現。
+### 🗓️ 2026-04-21: Phase 5 Kickoff (Visual Polish & Testing)
+- **次フェーズ要件**: アニメーションのブラッシュアップ（ウィンドウ表示時のフェード/スライド効果）と、実際の様々なアプリケーションでのルーティング動作テスト。

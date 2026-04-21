@@ -1,0 +1,25 @@
+{
+  "categories": {
+    "PC関連": {
+      "brands": ["Razer", "ASUS", "MSI", "Minisforum"],
+      "keywords": ["Ryzen 9 7945HX", "RX 7600M XT", "ミニPC", "ゲーミングノート", "自作PC", "メカニカルキーボード", "AtomMan G7 Pt"],
+      "score": 10
+    },
+    "音楽関連": {
+      "brands": ["Sony", "Panasonic", "Technics"],
+      "keywords": ["ギター", "エフェクター", "オーディオインターフェース", "ハイレゾ", "ワイヤレスイヤホン", "DAW", "真空管アンプ", "PRS", "Fender", "Gibson"],
+      "score": 10
+    },
+    "ガジェット全般": {
+      "brands": ["Anker"],
+      "keywords": ["モバイルバッテリー", "スマートウォッチ", "IoT", "USB-C", "充電器", "ガジェット"],
+      "score": 10
+    },
+    "AI・開発関連": {
+      "brands": ["NVIDIA", "OpenAI", "Anthropic", "Google", "Microsoft"],
+      "keywords": ["ローカルLLM", "NPU", "Copilot+", "RTX 50", "CUDA", "Stable Diffusion", "GitHub Copilot", "AIエージェント"],
+      "score": 10
+    }
+  },
+  "learned_keywords": {}
+}
