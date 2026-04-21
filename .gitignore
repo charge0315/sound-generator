@@ -22,3 +22,15 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Security Patterns
+.env
+*.env
+credentials.json
+*.pfx
+*.pem
+*.key
+*.p12
+node_modules/
+.venv/
+
