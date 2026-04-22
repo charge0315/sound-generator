@@ -60,6 +60,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "antigravity-pulse"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "image",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+ "window-vibrancy 0.7.1",
+ "windows 0.58.0",
+ "windows-core 0.58.0",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4130,22 +4146,6 @@ dependencies = [
  "webview2-com",
  "window-vibrancy 0.6.0",
  "windows 0.61.3",
-]
-
-[[package]]
-name = "tauri-app"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "image",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-opener",
- "window-vibrancy 0.7.1",
- "windows 0.58.0",
- "windows-core 0.58.0",
 ]
 
 [[package]]

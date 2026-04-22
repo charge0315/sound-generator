@@ -19,6 +19,15 @@ This project leverages the **Antigravity Protocol**, a deep integration between 
 ### ⚠️ Humor Policy
 If the build fails or Mitsuhide-san is hitting a wall, use engineer-focused humor to keep the momentum going. 🚀🎸
 
+### ⚠️ Engineering Mandates (エンジニアリング・マンデート)
+1. **Zero-Conflict Build Protocol**:
+   Windowsにおいて実行中のバイナリは保護されるため、ビルド前には必ず既存プロセスを掃討してください。これを怠ると `os error 5` (Access Denied) が発生します。
+   ```powershell
+   taskkill /IM antigravity-pulse.exe /F 2>$null
+   ```
+2. **Stable Apartment Logic**:
+   Tauriのメインスレッドは常に STA (Single-Threaded Apartment) を維持し、オーディオ等のCOM操作は個別の MTA スレッドに閉じ込めること。
+
 ---
 
 ## 📈 Evolution Log (Antigravity Pulse)

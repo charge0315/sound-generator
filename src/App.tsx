@@ -1,7 +1,21 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, Event } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+
+interface AudioSession {
+  process_id: number;
+  process_name: string;
+  volume: number;
+  is_muted: boolean;
+  peak_level: number;
+  icon_base64?: string | null;
+  device_id: string;
+}
+
+interface AudioDevice {
+  id: string;
+  name: string;
+}
 
 interface AudioEventPayload {
   process_id: number;
@@ -11,62 +25,18 @@ interface AudioEventPayload {
   icon_base64?: string | null;
 }
 
-interface AudioDevice {
-  id: string;
-  name: string;
-}
-
 function App() {
-  const [sessions, setSessions] = useState<any[]>([]);
+  const [sessions, setSessions] = useState<AudioSession[]>([]);
   const [devices, setDevices] = useState<AudioDevice[]>([]);
   const [peaks, setPeaks] = useState<Record<number, number>>({});
   const [totalPeak, setTotalPeak] = useState(0);
   const [errorMsg, setErrorMsg] = useState("");
-  const [isEntering, setIsEntering] = useState(false);
-  const appWindow = getCurrentWindow();
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [isEntering, setIsEntering] = useState(true);
 
   useEffect(() => {
-    fetchSessions();
-    fetchDevices();
+    refreshData();
 
-    const unlistenTray = listen<any>("tray_click_left", async (event) => {
-      const isVisible = await appWindow.isVisible();
-      if (isVisible) {
-        setIsEntering(false);
-        // アニメーションが終わるのを少し待ってから非表示にする
-        setTimeout(() => appWindow.hide(), 200);
-      } else {
-        const width = 360;
-        const height = 500;
-        
-        // --- 高度な配置ロジック ---
-        const monitor = await (appWindow as any).currentMonitor();
-        if (monitor) {
-          const { x: clickX, y: clickY } = event.payload;
-          const { size: mSize, position: mPos } = monitor;
-          
-          let targetX = clickX - (width / 2);
-          let targetY = clickY - height - 8; // デフォルトは上（タスクバーが下にある場合）
-
-          // 画面端の境界チェック（はみ出し防止）
-          if (targetX < mPos.x) targetX = mPos.x + 8;
-          if (targetX + width > mPos.x + mSize.width) targetX = mPos.x + mSize.width - width - 8;
-
-          // タスクバーが上にある場合の判定（単純化のため y 座標で判断）
-          if (clickY < mPos.y + 100) {
-            targetY = clickY + 24; // 下に表示
-          }
-
-          await invoke("set_window_position", { x: Math.round(targetX), y: Math.round(targetY) });
-        }
-
-        setIsEntering(true);
-        await appWindow.show();
-        await appWindow.setFocus();
-      }
-    });
-
+    // 1. 高頻度ピークデータ (30fps)
     const unlistenPulse = listen<any[]>("audio-pulse", (event) => {
       let maxP = 0;
       setPeaks((prev) => {
@@ -80,246 +50,215 @@ function App() {
       setTotalPeak(maxP);
     });
 
+    // 2. 音量・ミュート変更通知
     const unlistenAudio = listen<AudioEventPayload>("audio-session-event", (event: Event<AudioEventPayload>) => {
-      setSessions((prevSessions) => {
-        return prevSessions.map((session) => {
-          if (session.process_id === event.payload.process_id) {
+      setSessions((prev) =>
+        prev.map((s) => {
+          if (s.process_id === event.payload.process_id) {
             return {
-              ...session,
-              volume: event.payload.volume !== null ? event.payload.volume : session.volume,
-              is_muted: event.payload.mute !== null ? event.payload.mute : session.is_muted,
+              ...s,
+              volume: event.payload.volume !== null ? event.payload.volume : s.volume,
+              is_muted: event.payload.mute !== null ? event.payload.mute : s.is_muted,
             };
           }
-          return session;
-        });
-      });
+          return s;
+        })
+      );
     });
 
-    // ウィンドウがフォーカスを失ったら自動的に閉じる（Windows 11 標準フライアウト挙動）
-    const unlistenBlur = (appWindow as any).onFocusChanged(({ focused }: { focused: boolean }) => {
-      if (!focused) {
-        setIsEntering(false);
-        setTimeout(() => appWindow.hide(), 200);
-      }
+    // 3. デバイス変更 or ウィンドウ表示時の強制リフレッシュ
+    const unlistenRefresh = listen("refresh-trigger", refreshData);
+    const unlistenVisible = listen("window-visible", () => {
+      console.log("PULSE: Window shown, refreshing...");
+      refreshData();
     });
+
+    // 4. 定期的な監視（5秒に一度、漏れているセッションを掻き集める）
+    const interval = setInterval(refreshData, 5000);
 
     return () => {
-      unlistenTray.then((f: any) => f());
-      unlistenPulse.then((f: any) => f());
-      unlistenAudio.then((f: any) => f());
-      unlistenBlur.then((f: any) => f());
+      unlistenPulse.then((f) => f());
+      unlistenAudio.then((f) => f());
+      unlistenRefresh.then((f) => f());
+      unlistenVisible.then((f) => f());
+      clearInterval(interval);
     };
   }, []);
 
-  async function fetchSessions() {
+  async function refreshData() {
     try {
-      const result = await invoke("get_audio_sessions");
-      setSessions(result as any[]);
+      const [s, d] = await Promise.all([
+        invoke<AudioSession[]>("get_audio_sessions"),
+        invoke<AudioDevice[]>("get_audio_devices")
+      ]);
+      setSessions(s);
+      setDevices(d);
     } catch (e: any) {
       setErrorMsg(e.toString());
-    }
-  }
-
-  async function fetchDevices() {
-    try {
-      const result = await invoke("get_audio_devices");
-      setDevices(result as AudioDevice[]);
-    } catch (e: any) {
-      console.error("Failed to fetch devices:", e);
     }
   }
 
   async function setVolume(pid: number, vol: number) {
-    setSessions((prev) =>
-      prev.map((s) => (s.process_id === pid ? { ...s, volume: vol } : s))
-    );
-    try {
-      await invoke("set_session_volume", { processId: pid, volume: vol });
-    } catch (e: any) {
-      setErrorMsg(e.toString());
-      fetchSessions();
-    }
+    setSessions((prev) => prev.map((s) => (s.process_id === pid ? { ...s, volume: vol } : s)));
+    await invoke("set_session_volume", { processId: pid, volume: vol }).catch(setErrorMsg);
   }
 
   async function setMute(pid: number, mute: boolean) {
-    setSessions((prev) =>
-      prev.map((s) => (s.process_id === pid ? { ...s, is_muted: mute } : s))
-    );
-    try {
-      await invoke("set_session_mute", { processId: pid, mute });
-    } catch (e: any) {
-      setErrorMsg(e.toString());
-      fetchSessions();
-    }
+    setSessions((prev) => prev.map((s) => (s.process_id === pid ? { ...s, is_muted: mute } : s)));
+    await invoke("set_session_mute", { processId: pid, mute }).catch(setErrorMsg);
   }
 
-  async function setAudioRouting(pid: number, deviceId: string) {
-    if (!deviceId) return;
-    try {
-      await invoke("set_audio_routing", { processId: pid, deviceId });
-    } catch (e: any) {
-      setErrorMsg(e.toString());
-    }
+  async function setRouting(pid: number, deviceId: string) {
+    if (pid === 0) return;
+    await invoke("set_audio_routing", { processId: pid, deviceId }).catch(setErrorMsg);
+    setTimeout(refreshData, 500);
+  }
+
+  async function handleClose() {
+    setIsEntering(false);
+    setTimeout(() => {
+      invoke("hide_window");
+    }, 200);
   }
 
   return (
     <main
-      ref={containerRef}
-      className={`flex flex-col h-screen overflow-hidden text-white select-none transition-all duration-300 ${isEntering ? 'window-enter-active' : 'window-enter'}`}
+      className={`flex flex-col h-screen overflow-hidden text-white select-none transition-all duration-300 ${
+        isEntering ? "window-enter-active" : "window-enter"
+      }`}
       style={{ background: "transparent" }}
     >
-      {/* 背景オーバーレイ：全体の音量に合わせて青く鼓動する */}
       <div 
-        className="absolute inset-0 bg-blue-500/10 pointer-events-none z-[-1] transition-opacity duration-100"
-        style={{ opacity: totalPeak * 0.4 }}
+        className="absolute inset-0 bg-blue-500/10 pointer-events-none z-[-1] transition-opacity duration-150"
+        style={{ opacity: totalPeak * 0.6 }}
       ></div>
-      <div className="absolute inset-0 bg-black/20 pointer-events-none z-[-2]"></div>
+      <div className="absolute inset-0 bg-[#0a0a0a]/95 border border-white/10 shadow-[0_0_40px_rgba(0,0,0,0.8)] pointer-events-none z-[-2] rounded-2xl"></div>
 
-      {/* カスタムタイトルバー（ドラッグ可能領域） */}
-      <div
-        data-tauri-drag-region
-        className="h-12 flex items-center justify-between px-4"
-      >
-        <div data-tauri-drag-region className="text-xs font-bold tracking-widest flex items-center gap-3 text-blue-400 uppercase">
+      <div data-tauri-drag-region className="h-12 flex items-center justify-between px-5 shrink-0">
+        <div data-tauri-drag-region className="flex items-center gap-3">
           <div className="relative w-5 h-5 flex items-center justify-center">
              <div className="absolute inset-0 bg-blue-500/20 rounded-full animate-pulse"></div>
-             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
           </div>
-          Antigravity Pulse
+          <span className="text-[10px] font-bold tracking-widest text-blue-400 uppercase">Antigravity Pulse</span>
         </div>
-        <div className="flex z-50 gap-1">
-          <button onClick={() => appWindow.minimize()} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 transition-colors">
-            <svg width="12" height="12" viewBox="0 0 12 12"><path fill="currentColor" d="M1,6v1h10V6H1z" /></svg>
-          </button>
-          <button onClick={() => { setIsEntering(false); setTimeout(() => appWindow.hide(), 200); }} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-red-500/80 transition-colors">
-            <svg width="12" height="12" viewBox="0 0 12 12"><path fill="currentColor" d="M11,2.1L9.9,1L6,4.9L2.1,1L1,2.1L4.9,6L1,9.9L2.1,11L6,7.1L9.9,11L11,9.9L7.1,6L11,2.1z" /></svg>
-          </button>
-        </div>
+        <button onClick={handleClose} className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-red-500/20 hover:text-red-400 transition-all active:scale-90">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-5 pb-6 scroll-smooth">
-        <div className="flex justify-between items-center mt-2 mb-6">
-          <h1 className="text-2xl font-bold tracking-tight">Mixer</h1>
-          <button
-            className="w-8 h-8 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/15 border border-white/5 transition-all active:scale-90"
-            onClick={fetchSessions}
-            title="Refresh"
-          >
-            <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-          </button>
-        </div>
-
+      <div className="flex-1 overflow-y-auto overflow-x-hidden px-5 pb-6 custom-scrollbar space-y-12">
         {errorMsg && (
-          <div className="animate-in fade-in slide-in-from-top-2 duration-300 bg-red-500/10 text-red-400 p-3 rounded-xl border border-red-500/20 mb-4 text-xs">
+          <div className="bg-red-500/10 text-red-400 p-3 rounded-xl border border-red-500/20 mb-4 text-[10px] font-mono break-all">
             {errorMsg}
           </div>
         )}
 
-        <div className="space-y-4">
-          {sessions.map((session) => (
-            <div
-              key={session.process_id}
-              className="group relative bg-white/[0.03] hover:bg-white/[0.08] border border-white/5 rounded-2xl p-4 transition-all duration-300 ease-out"
-            >
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 flex-shrink-0 bg-black/20 rounded-xl flex items-center justify-center border border-white/5 shadow-inner overflow-hidden">
-                  {session.icon_base64 ? (
-                    <img
-                      src={`data:image/png;base64,${session.icon_base64}`}
-                      alt={session.process_name}
-                      className="w-8 h-8 object-contain"
-                    />
-                  ) : (
-                    <div className="text-[10px] font-bold text-white/40">{session.process_name.substring(0, 2).toUpperCase()}</div>
-                  )}
-                </div>
+        {devices.map((device) => {
+          const deviceSessions = sessions.filter(s => s.device_id === device.id);
+          return (
+            <section key={device.id} className="animate-in fade-in slide-in-from-bottom-2 duration-500">
+              <div className="flex items-center gap-4 mb-6">
+                 <div className="w-2 h-7 bg-blue-500 rounded-full shadow-[0_0_15px_rgba(59,130,246,0.6)]"></div>
+                 <h2 className="text-[20px] font-black tracking-tighter text-white/95 uppercase truncate leading-none">
+                   {device.name}
+                 </h2>
+                 <div className="flex-1 h-[1px] bg-white/10"></div>
+              </div>
 
-                <div className="flex-1 min-w-0">
-                  <div className="flex justify-between items-center mb-1">
-                    <h3 className="font-bold text-sm truncate text-white/90">{session.process_name}</h3>
-                    <div className="flex items-center gap-2">
-                      <select
-                        className="bg-transparent text-[10px] text-white/40 hover:text-white/80 transition-colors cursor-pointer appearance-none outline-none border-none pr-1"
-                        onChange={(e) => setAudioRouting(session.process_id, e.target.value)}
-                        defaultValue=""
-                      >
-                        <option value="" disabled>Routing</option>
-                        {devices.map(d => (
-                          <option key={d.id} value={d.id} className="bg-neutral-900">{d.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
+              <div className="space-y-6">
+                {deviceSessions.map((s) => (
+                  <div key={s.process_id} className="group bg-white/[0.02] hover:bg-white/[0.05] border border-white/5 rounded-[28px] p-6 transition-all duration-300">
+                    <div className="flex flex-col gap-4">
+                      <div className="flex justify-between items-start">
+                         <h3 className="font-black text-[17px] text-white/95 break-words leading-tight flex-1 mr-4">
+                           {s.process_name}
+                         </h3>
+                         <div className="text-[9px] font-mono text-white/10 bg-white/5 px-2 py-0.5 rounded-full border border-white/5 uppercase">PID:{s.process_id}</div>
+                      </div>
 
-                  <div className="flex items-center gap-4 relative">
-                    <div className="relative flex-1 flex flex-col justify-center group/slider">
-                      <input
-                        type="range"
-                        min="0" max="1" step="0.01"
-                        value={session.volume}
-                        onChange={(e) => setVolume(session.process_id, parseFloat(e.target.value))}
-                        className="fluent-slider"
-                        style={{
-                          background: `linear-gradient(to right, #60A5FA ${(session.volume * 100)}%, rgba(255,255,255,0.1) ${(session.volume * 100)}%)`
-                        }}
-                      />
-                      {/* --- Peak Meter Overlay --- */}
-                      <div className="absolute left-0 bottom-1 w-full h-[2px] bg-white/5 rounded-full overflow-hidden pointer-events-none">
-                        <div 
-                          className="h-full bg-green-400/60 shadow-[0_0_8px_rgba(74,222,128,0.4)]"
-                          style={{ 
-                            width: `${(peaks[session.process_id] || 0) * 100}%`,
-                            transition: 'width 0.05s linear' // わずかな遊びでパタつきを抑える
-                          }}
-                        />
+                      {s.process_id !== 0 ? (
+                        <div className="relative group/select">
+                          <div className="absolute left-4 top-1/2 -translate-y-1/2 text-blue-400/40 group-hover/select:text-blue-400 transition-colors">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                          </div>
+                          <select
+                            className="appearance-none bg-blue-500/5 border border-white/5 hover:border-blue-500/30 rounded-2xl w-full pl-12 pr-4 py-2.5 text-[11px] font-black text-blue-300/80 hover:text-blue-100 transition-all cursor-pointer outline-none"
+                            onChange={(e) => setRouting(s.process_id, e.target.value)}
+                            value={s.device_id}
+                          >
+                            {devices.map(d => (
+                              <option key={d.id} value={d.id} className="bg-[#0a0a0a] text-white py-3">
+                                SWITCH TO: {d.name}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-white/10">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M6 9l6 6 6-6"/></svg>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="px-4 py-2 bg-white/5 rounded-2xl text-[10px] font-bold text-white/20 italic tracking-widest text-center border border-white/5">
+                          SYSTEM CORE ROUTING RESTRICTED
+                        </div>
+                      )}
+
+                      <div className="flex items-center gap-5 pt-1">
+                        <div className="w-14 h-14 flex-shrink-0 bg-black/60 rounded-2xl flex items-center justify-center border border-white/5 relative shadow-2xl overflow-hidden">
+                          {s.icon_base64 ? (
+                            <img src={`data:image/png;base64,${s.icon_base64}`} className="w-9 h-9 object-contain drop-shadow" alt="" />
+                          ) : (
+                            <div className="text-[12px] font-black text-white/10 uppercase">{s.process_name.substring(0, 2)}</div>
+                          )}
+                          <div className="absolute inset-0 bg-gradient-to-tr from-blue-500/10 to-transparent"></div>
+                        </div>
+
+                        <div className="flex-1 relative flex flex-col justify-center h-14">
+                          <input
+                            type="range" min="0" max="1" step="0.01"
+                            value={s.volume}
+                            onChange={(e) => setVolume(s.process_id, parseFloat(e.target.value))}
+                            className="fluent-slider"
+                            style={{ 
+                              background: `linear-gradient(to right, #3b82f6 ${(s.volume * 100)}%, rgba(255,255,255,0.03) ${(s.volume * 100)}%)` 
+                            }}
+                          />
+                          <div className="absolute left-0 bottom-2.5 w-full h-[4px] bg-white/5 rounded-full overflow-hidden pointer-events-none">
+                            <div 
+                              className="h-full bg-gradient-to-r from-green-500 via-green-400 to-yellow-300 shadow-[0_0_12px_rgba(74,222,128,0.5)] transition-all duration-75"
+                              style={{ width: `${(peaks[s.process_id] || 0) * 100}%` }}
+                            ></div>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => setMute(s.process_id, !s.is_muted)}
+                          className={`w-12 h-12 flex-shrink-0 flex items-center justify-center rounded-2xl transition-all active:scale-90 border-2 ${
+                            s.is_muted ? "bg-red-500/10 border-red-500/40 text-red-500 shadow-[0_0_20px_rgba(239,68,68,0.2)]" : "bg-white/5 border-white/5 text-white/40 hover:text-blue-400 hover:border-blue-400/30"
+                          }`}
+                        >
+                          {s.is_muted ? (
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M11 5L6 9H2v6h4l5 4V5zM23 9l-6 6M17 9l6 6"/></svg>
+                          ) : (
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M11 5L6 9H2v6h4l5 4V5zM19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/></svg>
+                          )}
+                        </button>
                       </div>
                     </div>
-                    <span className="text-[11px] text-right w-8 text-white/60 font-mono font-bold">
-                      {Math.round(session.volume * 100)}
-                    </span>
                   </div>
-                </div>
-
-                <button
-                  className={`flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-xl transition-all active:scale-90 border ${session.is_muted
-                    ? 'bg-red-500/20 text-red-400 border-red-500/20 hover:bg-red-500/30'
-                    : 'bg-white/5 text-white/60 border-white/10 hover:bg-white/15 hover:text-white'
-                    }`}
-                  onClick={() => setMute(session.process_id, !session.is_muted)}
-                >
-                  {session.is_muted ? (
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" /></svg>
-                  ) : (
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" /></svg>
-                  )}
-                </button>
+                ))}
               </div>
-            </div>
-          ))}
-          {sessions.length === 0 && (
-            <div className="text-center py-12 text-white/40 border border-white/5 bg-white/5 rounded-2xl flex flex-col items-center gap-2">
-              <svg className="w-8 h-8 opacity-50 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path></svg>
-              <p className="text-sm font-medium tracking-wide">No active audio streams found</p>
-              <p className="text-xs opacity-70">Play some audio and hit Refresh.</p>
-            </div>
-          )}
-        </div>
+            </section>
+          );
+        })}
       </div>
-      
-      {/* 
-          フッター：インジケーターが音量に合わせて強く発光する。 
-      */}
-      <div className="h-10 px-5 flex items-center justify-between border-t border-white/5 bg-white/[0.02]">
-        <div className="text-[10px] text-white/30 font-medium italic tracking-widest">ANTIGRAVITY // PULSE SYSTEM READY</div>
-        <div className="flex gap-4">
-           <div 
-             className="w-1.5 h-1.5 rounded-full bg-green-500 transition-all duration-75"
-             style={{ 
-               boxShadow: `0 0 ${8 + totalPeak * 20}px rgba(34,197,94,${0.4 + totalPeak * 0.6})`,
-               transform: `scale(${1 + totalPeak * 0.5})`
-             }}
-           ></div>
+
+      <div className="h-10 px-6 flex items-center justify-between border-t border-white/5 bg-white/[0.01]">
+        <div className="flex items-center gap-2">
+           <div className={`w-1.5 h-1.5 rounded-full ${totalPeak > 0.01 ? 'bg-green-500 animate-pulse' : 'bg-white/10'}`}></div>
+           <span className="text-[9px] font-black tracking-widest text-white/30 uppercase italic tracking-widest">Pulse Protocol Stable // Optimized</span>
         </div>
+        <div className="text-[8px] font-mono text-white/10 uppercase tracking-[.2em]">AtomMan G7 Pt // X-Pulse Engine</div>
       </div>
     </main>
   );

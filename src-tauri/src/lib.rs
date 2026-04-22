@@ -1,17 +1,16 @@
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use tauri::Manager;
+use window_vibrancy::apply_acrylic;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, WindowEvent};
-use window_vibrancy::apply_acrylic;
 
 mod audio;
-use audio::{init_com, AudioManager, AudioSessionInfo};
+mod window;
 
-// AudioManagerはスレッドセーフではないCOMインターフェースを持つため、
-// AudioManagerは、WindowsのオーディオAPI (WASAPI / EndpointVolume) のCOMオブジェクトの参照を保持する。
-// COMの世界ではスレッドの「アパートメント(STA/MTA)」の概念があり、RustのようにSend/Syncを
-// 単純にスレッド間で渡すことが許されないことが多いが、MTAとして初期化した上でMutexでラップすることで
-// Tauriのコマンド（バックグラウンドスレッドプール）から安全に呼び出せるようにハックしている。
+use audio::{AudioManager, AudioSessionInfo};
+use window::WindowManager;
+
 pub struct AudioState(Mutex<Option<AudioManager>>);
 
 impl AudioState {
@@ -19,10 +18,7 @@ impl AudioState {
     where
         F: FnOnce(&mut AudioManager) -> Result<R, String>,
     {
-        // どのスレッドから呼ばれても安全にCOMを操作できるよう、毎回 MTA (Multi-Threaded Apartment) としてCOMを初期化する。
-        // S_FALSE（既に初期化済み）が返ることもあるが、気にしない。
-        let _ = init_com();
-        let mut guard = self.0.lock().map_err(|_| "Deadlock".to_string())?;
+        let mut guard = self.0.lock().map_err(|_| "AudioState Mutex Lock Failed".to_string())?;
         if guard.is_none() {
             let mut manager = AudioManager::new().map_err(|e| e.to_string())?;
             manager.set_app_handle(app_handle.clone());
@@ -31,20 +27,20 @@ impl AudioState {
         if let Some(manager) = guard.as_mut() {
             f(manager)
         } else {
-            Err("Failed to initialize AudioManager".to_string())
+            Err("AudioManager is missing after init".to_string())
         }
     }
 }
+
+// --- Tauri Commands ---
 
 #[tauri::command]
 fn get_audio_sessions(
     app: tauri::AppHandle,
     state: tauri::State<'_, AudioState>,
 ) -> Result<Vec<AudioSessionInfo>, String> {
-    state.with_manager(&app, |manager| {
-        manager
-            .get_sessions()
-            .map_err(|e| format!("Failed to get sessions: {}", e))
+    state.with_manager(&app, |manager: &mut AudioManager| {
+        manager.get_sessions().map_err(|e: windows::core::Error| e.to_string())
     })
 }
 
@@ -56,12 +52,10 @@ fn set_session_volume(
     state: tauri::State<'_, AudioState>,
 ) -> Result<(), String> {
     if !(0.0..=1.0).contains(&volume) {
-        return Err("Volume must be between 0.0 and 1.0".to_string());
+        return Err("Volume must be 0.0-1.0".to_string());
     }
-    state.with_manager(&app, |manager| {
-        manager
-            .set_session_volume(process_id, volume)
-            .map_err(|e| format!("Failed to set volume: {}", e))
+    state.with_manager(&app, |manager: &mut AudioManager| {
+        manager.set_session_volume(process_id, volume).map_err(|e: windows::core::Error| e.to_string())
     })
 }
 
@@ -72,10 +66,8 @@ fn set_session_mute(
     mute: bool,
     state: tauri::State<'_, AudioState>,
 ) -> Result<(), String> {
-    state.with_manager(&app, |manager| {
-        manager
-            .set_session_mute(process_id, mute)
-            .map_err(|e| format!("Failed to set mute: {}", e))
+    state.with_manager(&app, |manager: &mut AudioManager| {
+        manager.set_session_mute(process_id, mute).map_err(|e: windows::core::Error| e.to_string())
     })
 }
 
@@ -86,10 +78,8 @@ fn set_audio_routing(
     device_id: String,
     state: tauri::State<'_, AudioState>,
 ) -> Result<(), String> {
-    state.with_manager(&app, |manager| {
-        manager
-            .set_audio_routing(process_id, &device_id)
-            .map_err(|e| format!("Failed to set audio routing: {}", e))
+    state.with_manager(&app, |manager: &mut AudioManager| {
+        manager.set_audio_routing(process_id, &device_id).map_err(|e: windows::core::Error| e.to_string())
     })
 }
 
@@ -98,11 +88,22 @@ fn get_audio_devices(
     app: tauri::AppHandle,
     state: tauri::State<'_, AudioState>,
 ) -> Result<Vec<audio::AudioDeviceInfo>, String> {
-    state.with_manager(&app, |manager| {
-        manager
-            .get_audio_devices()
-            .map_err(|e| format!("Failed to get audio devices: {}", e))
+    state.with_manager(&app, |manager: &mut AudioManager| {
+        manager.get_audio_devices().map_err(|e: windows::core::Error| e.to_string())
     })
+}
+
+#[tauri::command]
+fn hide_window(
+    app: tauri::AppHandle,
+    window_state: tauri::State<'_, Mutex<WindowManager>>,
+) -> Result<(), String> {
+    if let Ok(mut guard) = window_state.lock() {
+        guard.hide(&app);
+        Ok(())
+    } else {
+        Err("Failed to lock WindowState".to_string())
+    }
 }
 
 #[tauri::command]
@@ -112,60 +113,42 @@ fn set_window_position(window: tauri::Window, x: i32, y: i32) -> Result<(), Stri
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-fn greet(name: &str) -> String {
-
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_com_init() {
-        // COM初期化がエラーにならずに実行できるか確認
-        let result = init_com();
-        assert!(result.is_ok());
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
+    // 終了フラグの作成 (Arc<AtomicBool>)
+    let is_running = Arc::new(AtomicBool::new(true));
+    let is_running_for_thread = Arc::clone(&is_running);
+
+    tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .on_window_event(|window, event| {
-            match event {
-                // Focus out logic temporarily disabled for dragging
-                // WindowEvent::Focused(false) => {
-                //     let _ = window.hide();
-                // }
-                WindowEvent::CloseRequested { api, .. } => {
-                    // Prevent the window from completely closing (which might cause the app to exit)
-                    // Instead, just hide it.
-                    let _ = window.hide();
-                    api.prevent_close();
-                }
-                _ => {}
-            }
-        })
-        .setup(|app| {
+        .manage(AudioState(Mutex::new(None)))
+        .manage(Mutex::new(WindowManager::default()))
+        .setup(move |app| {
+            // トレイのインライン初期化
             let quit_i = MenuItem::with_id(app, "quit", "Exit", true, None::<&str>)?;
             let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
 
+            let is_running_for_menu = Arc::clone(&is_running);
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "quit" => {
-                        app.exit(0);
+                .on_menu_event(move |app, event| {
+                    let window_state = app.state::<Mutex<WindowManager>>();
+                    let mut guard = window_state.lock().unwrap();
+                    
+                    match event.id.as_ref() {
+                        "quit" => {
+                            // 終了フラグを倒す
+                            is_running_for_menu.store(false, Ordering::SeqCst);
+                            // 強制終了プロトコル (道連れ終了)
+                            std::process::exit(0);
+                        }
+                        "show" => {
+                            guard.toggle(app, (0, 0));
+                        }
+                        _ => {}
                     }
-                    "show" => {
-                        use tauri::Emitter;
-                        let _ = app.emit("tray_menu_show", ());
-                    }
-                    _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
@@ -175,63 +158,46 @@ pub fn run() {
                     } = event
                     {
                         let app = tray.app_handle();
+                        let window_state = app.state::<Mutex<WindowManager>>();
+                        let mut guard = window_state.lock().unwrap();
 
                         let mut point = windows::Win32::Foundation::POINT { x: 0, y: 0 };
                         let (icon_x, icon_y) = unsafe {
-                            if windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut point)
-                                .is_ok()
-                            {
+                            if windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut point).is_ok() {
                                 (point.x, point.y)
                             } else {
                                 (0, 0)
                             }
                         };
 
-                        #[derive(serde::Serialize, Clone)]
-                        struct TrayPos {
-                            x: i32,
-                            y: i32,
-                        }
-
-                        use tauri::Emitter;
-                        let _ = app.emit(
-                            "tray_click_left",
-                            TrayPos {
-                                x: icon_x,
-                                y: icon_y,
-                            },
-                        );
+                        guard.toggle(app, (icon_x, icon_y));
                     }
                 })
                 .build(app)?;
 
-            // フロントエンド側の背景透過と組み合わせて、Windowsネイティブの「すりガラス」効果を適用する。
+            std::mem::forget(_tray);
+
+            // ウィンドウの初期設定
             if let Some(window) = app.get_webview_window("main") {
                 #[cfg(target_os = "windows")]
                 {
-                    // alwaysOnTop や skipTaskbar なウィンドウの場合、OSの制約により Mica が効かない（フォールバックされる）ケースが多いため、
-                    // ここでは強制的に Acrylic 効果 (より深く透過するすりガラス) を適用している。
-                    // RGB/Альファ値の調整でダークテーマに馴染ませている。
-                    let _ = apply_acrylic(&window, Some((18, 18, 18, 160)));
+                    let _ = apply_acrylic(&window, Some((10, 10, 10, 180)));
                 }
             }
 
-            // --- Phase 6: Peak Level 配信ループ ---
+            // Peak Pulse 配信ループ (30fps)
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 use tauri::Emitter;
-                loop {
-                    // 33ms (約30fps) 間隔でピーク値を配信
+                while is_running_for_thread.load(Ordering::SeqCst) {
                     std::thread::sleep(std::time::Duration::from_millis(33));
-
                     let state = handle.state::<AudioState>();
-                    let peaks = state.with_manager(&handle, |manager| {
-                        manager.get_peak_levels().map_err(|e| e.to_string())
+                    let peaks: Result<Vec<(u32, f32)>, String> = state.with_manager(&handle, |manager: &mut AudioManager| {
+                        manager.get_peak_levels().map_err(|e: windows::core::Error| e.to_string())
                     });
 
                     if let Ok(peak_data) = peaks {
                         if !peak_data.is_empty() {
-                            // [{pid, peak}, ...] の形式で送信
                             let payload: Vec<serde_json::Value> = peak_data
                                 .into_iter()
                                 .map(|(pid, peak)| serde_json::json!({ "pid": pid, "peak": peak }))
@@ -244,23 +210,20 @@ pub fn run() {
 
             Ok(())
         })
-        .manage(AudioState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
-            greet,
             get_audio_sessions,
             set_session_volume,
             set_session_mute,
             set_audio_routing,
             get_audio_devices,
+            hide_window,
             set_window_position
         ])
         .build(tauri::generate_context!())
-        .expect("error while building tauri application");
-
-    app.run(|_app_handle, event| {
-        if let tauri::RunEvent::ExitRequested { api, .. } = event {
-            // Keep the app running in the background for the tray icon
-            api.prevent_exit();
-        }
-    });
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                api.prevent_exit();
+            }
+        });
 }

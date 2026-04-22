@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Antigravity Pulse",
         "width": 360,
         "height": 500,
