@@ -45,5 +45,10 @@
 - **Modern COM Binding**: `windows_core::interface` マクロを導入し、型安全かつ可読性の高い非公開APIバインディングへ刷新。
 - **Tray Flyout**: トレイアイコンのクリック座標 (x, y) をフロントエンドへ飛ばし、ウィンドウ位置を自動計算して表示する `set_window_position` 機能を実装。
 - **Fluid UX**: ウィンドウサイズの同期と、クリック時のスムーズな表示/非表示（トグル動作）を実現。
-### 🗓️ 2026-04-21: Phase 5 Kickoff (Visual Polish & Testing)
-- **次フェーズ要件**: アニメーションのブラッシュアップ（ウィンドウ表示時のフェード/スライド効果）と、実際の様々なアプリケーションでのルーティング動作テスト。
+### 🗓️ 2026-04-22: Phase 5 Completed (Visual Polish, Security & Testing)
+- **Fluid UX Extreme**: WinUI 3 スタイルのスライダーと、下から浮かび上がるフェードインアニメーションを実装。タスクバーの位置（上下左右）を自動判定し、常に最適な位置に吸い付く高度な配置ロジックを統合。
+- **Security & Safety**: フロントエンドからの音量入力に対する `0.0~1.0` のバリデーション、`PROPVARIANT` のメモリリーク修正、およびイベントリスナーの重複登録防止（PIDトラッキング）を完了。
+- **Automated Verification**: Rust (Cargo) による COM 初期化テストと React (Vitest) による UI レンダリングテストを導入。`TEST_EVIDENCE.md` を生成。
+- **Final Audit**: 各種エージェント（Code Architect, Security Reviewer等）による全方位的なコードレビューと最適化をパス。
+### 🗓️ 2026-04-22: Phase 6 Kickoff (Advanced Audio Features & Packaging)
+- **次フェーズ要件**: アプリケーションごとの「デフォルト出力デバイス」の永続化保存機能の強化と、インストーラー（WiX/NSIS）のセットアップによる配布準備。

@@ -269,6 +269,13 @@ function App() {
               </div>
             </div>
           ))}
+          {sessions.length === 0 && (
+            <div className="text-center py-12 text-white/40 border border-white/5 bg-white/5 rounded-2xl flex flex-col items-center gap-2">
+              <svg className="w-8 h-8 opacity-50 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path></svg>
+              <p className="text-sm font-medium tracking-wide">No active audio streams found</p>
+              <p className="text-xs opacity-70">Play some audio and hit Refresh.</p>
+            </div>
+          )}
         </div>
       </div>
       
@@ -284,8 +291,5 @@ function App() {
     </main>
   );
 }
-
-export default App;
-
 
 export default App;
