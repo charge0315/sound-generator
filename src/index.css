@@ -1,80 +1,62 @@
 @import "tailwindcss";
 
+@theme {
+  --color-pulse-neon: #00f2ff;
+  --color-pulse-deep: #0a0b10;
+  --font-mono: "Fira Code", monospace;
+}
+
 :root {
-  font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-
+  font-family: 'Segoe UI', Inter, system-ui, sans-serif;
   color-scheme: dark;
-  color: #FFFFFF;
-  background-color: transparent;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
 }
 
 body {
   margin: 0;
-  min-width: 320px;
-  min-height: 100vh;
-  background: transparent;
+  background-color: transparent !important;
   overflow: hidden;
+  color: white;
 }
 
-/* --- EarTrumpet Style Slider --- */
-@layer components {
-  .fluent-slider {
-    @apply appearance-none bg-transparent w-full h-8 flex items-center cursor-pointer outline-none relative;
-  }
-
-  .fluent-slider::-webkit-slider-runnable-track {
-    @apply w-full h-[4px] bg-white/10 rounded-full transition-all duration-200;
-  }
-
-  .fluent-slider::-webkit-slider-thumb {
-    @apply appearance-none w-1 h-5 bg-white rounded-full shadow-[0_0_10px_rgba(255,255,255,0.3)] transition-all duration-150;
-    margin-top: -8.5px; /* (thumb height / 2) - (track height / 2) roughly */
-    border: 1px solid rgba(0,0,0,0.2);
-  }
-
-  .fluent-slider:hover::-webkit-slider-thumb {
-    @apply w-3 h-5 bg-white shadow-[0_0_15px_rgba(255,255,255,0.5)];
-    margin-top: -8.5px;
-  }
-
-  .fluent-slider:active::-webkit-slider-thumb {
-    @apply w-2 h-5 bg-blue-400 scale-95;
-  }
+#root {
+  height: 100vh;
+  width: 100vw;
+  background-color: rgba(10, 11, 16, 0.7); /* Mica/Acrylic の下地 */
+  backdrop-filter: blur(10px);
 }
 
-/* --- Window Animation --- */
-.window-enter {
-  opacity: 0;
-  transform: translateY(20px) scale(0.98);
-}
-
-.window-enter-active {
-  opacity: 1;
-  transform: translateY(0) scale(1);
-  transition: opacity 0.25s cubic-bezier(0.1, 0.9, 0.2, 1), transform 0.35s cubic-bezier(0.1, 0.9, 0.2, 1);
-}
-
-/* Custom scrollbar for Windows-feel */
+/* Custom Scrollbar */
 ::-webkit-scrollbar {
-  width: 8px;
+  width: 4px;
 }
-
 ::-webkit-scrollbar-track {
   background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 242, 255, 0.3);
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.4);
+/* Range Input Reset */
+input[type="range"] {
+  -webkit-appearance: none;
+  background: transparent;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 12px;
+  width: 12px;
+  border-radius: 50%;
+  background: #00f2ff;
+  margin-top: -4px;
+  box-shadow: 0 0 10px #00f2ff;
 }

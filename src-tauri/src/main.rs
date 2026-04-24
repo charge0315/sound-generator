@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    antigravity_pulse_lib::run()
+    antigravity_pulse_lib::run();
 }

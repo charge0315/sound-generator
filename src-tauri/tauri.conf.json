@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Antigravity Pulse",
+  "productName": "antigravity-pulse",
   "version": "0.1.0",
-  "identifier": "com.antigravity.pulse",
+  "identifier": "com.charg.antigravity-pulse",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,14 +12,16 @@
   "app": {
     "windows": [
       {
-        "label": "main",
         "title": "Antigravity Pulse",
-        "width": 640,
-        "height": 500,
-        "transparent": true,
+        "label": "main",
+        "width": 380,
+        "height": 620,
+        "resizable": false,
+        "fullscreen": false,
         "decorations": false,
-        "visible": false,
+        "transparent": true,
         "alwaysOnTop": true,
+        "visible": false,
         "skipTaskbar": true
       }
     ],
@@ -30,8 +32,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "publisher": "Antigravity Engineering",
-    "copyright": "Copyright © 2026 Antigravity Engineering. All rights reserved.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

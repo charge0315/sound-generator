@@ -1,9 +1,6 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use tauri::Manager;
-use window_vibrancy::apply_acrylic;
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use std::sync::Mutex;
+use tauri::{AppHandle, Manager, State};
+use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState};
 
 mod audio;
 mod window;
@@ -14,114 +11,44 @@ use window::WindowManager;
 pub struct AudioState(Mutex<Option<AudioManager>>);
 
 impl AudioState {
-    fn with_manager<F, R>(&self, app_handle: &tauri::AppHandle, f: F) -> Result<R, String>
+    fn with_manager<F, R>(&self, app_handle: &AppHandle, f: F) -> Result<R, String>
     where
         F: FnOnce(&mut AudioManager) -> Result<R, String>,
     {
-        let mut guard = self.0.lock().map_err(|_| "AudioState Mutex Lock Failed".to_string())?;
+        let mut guard = self.0.lock().map_err(|_| "Lock failed")?;
         if guard.is_none() {
+            let _ = audio::com::init_mta();
             let mut manager = AudioManager::new().map_err(|e| e.to_string())?;
             manager.set_app_handle(app_handle.clone());
             *guard = Some(manager);
         }
-        if let Some(manager) = guard.as_mut() {
-            f(manager)
-        } else {
-            Err("AudioManager is missing after init".to_string())
-        }
-    }
-}
-
-// --- Tauri Commands ---
-
-#[tauri::command]
-fn get_audio_sessions(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AudioState>,
-) -> Result<Vec<AudioSessionInfo>, String> {
-    state.with_manager(&app, |manager: &mut AudioManager| {
-        manager.get_sessions().map_err(|e: windows::core::Error| e.to_string())
-    })
-}
-
-#[tauri::command]
-fn set_session_volume(
-    app: tauri::AppHandle,
-    process_id: u32,
-    volume: f32,
-    state: tauri::State<'_, AudioState>,
-) -> Result<(), String> {
-    if !(0.0..=1.0).contains(&volume) {
-        return Err("Volume must be 0.0-1.0".to_string());
-    }
-    state.with_manager(&app, |manager: &mut AudioManager| {
-        manager.set_session_volume(process_id, volume).map_err(|e: windows::core::Error| e.to_string())
-    })
-}
-
-#[tauri::command]
-fn set_session_mute(
-    app: tauri::AppHandle,
-    process_id: u32,
-    mute: bool,
-    state: tauri::State<'_, AudioState>,
-) -> Result<(), String> {
-    state.with_manager(&app, |manager: &mut AudioManager| {
-        manager.set_session_mute(process_id, mute).map_err(|e: windows::core::Error| e.to_string())
-    })
-}
-
-#[tauri::command]
-fn set_audio_routing(
-    app: tauri::AppHandle,
-    process_id: u32,
-    device_id: String,
-    state: tauri::State<'_, AudioState>,
-) -> Result<(), String> {
-    state.with_manager(&app, |manager: &mut AudioManager| {
-        manager.set_audio_routing(process_id, &device_id).map_err(|e: windows::core::Error| e.to_string())
-    })
-}
-
-#[tauri::command]
-fn set_default_device(
-    app: tauri::AppHandle,
-    device_id: String,
-    state: tauri::State<'_, AudioState>,
-) -> Result<(), String> {
-    state.with_manager(&app, |manager: &mut AudioManager| {
-        manager.set_default_device(&device_id).map_err(|e: windows::core::Error| e.to_string())
-    })
-}
-
-#[tauri::command]
-fn get_audio_devices(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AudioState>,
-) -> Result<Vec<audio::AudioDeviceInfo>, String> {
-    state.with_manager(&app, |manager: &mut AudioManager| {
-        manager.get_audio_devices().map_err(|e: windows::core::Error| e.to_string())
-    })
-}
-
-#[tauri::command]
-fn hide_window(
-    app: tauri::AppHandle,
-    window_state: tauri::State<'_, Mutex<WindowManager>>,
-) -> Result<(), String> {
-    if let Ok(mut guard) = window_state.lock() {
-        guard.hide(&app);
-        Ok(())
-    } else {
-        Err("Failed to lock WindowState".to_string())
+        f(guard.as_mut().unwrap())
     }
 }
 
 #[tauri::command]
-fn set_window_position(window: tauri::Window, x: i32, y: i32) -> Result<(), String> {
-    window
-        .set_position(tauri::PhysicalPosition::new(x, y))
-        .map_err(|e| e.to_string())
+fn get_audio_sessions(app: AppHandle, state: State<'_, AudioState>) -> Result<Vec<AudioSessionInfo>, String> {
+    state.with_manager(&app, |m| m.get_sessions().map_err(|e| e.to_string()))
+}
+
+#[tauri::command]
+fn set_session_volume(app: AppHandle, state: State<'_, AudioState>, pid: u32, volume: f32) -> Result<(), String> {
+    state.with_manager(&app, |m| m.set_session_volume(pid, volume).map_err(|e| e.to_string()))
+}
+
+#[tauri::command]
+fn set_session_mute(app: AppHandle, state: State<'_, AudioState>, pid: u32, mute: bool) -> Result<(), String> {
+    state.with_manager(&app, |m| m.set_session_mute(pid, mute).map_err(|e| e.to_string()))
+}
+
+#[tauri::command]
+fn set_audio_routing(app: AppHandle, state: State<'_, AudioState>, pid: u32, device_id: String) -> Result<(), String> {
+    state.with_manager(&app, |m| m.set_audio_routing(pid, &device_id).map_err(|e| e.to_string()))
+}
+
+#[tauri::command]
+fn get_audio_devices(app: AppHandle, state: State<'_, AudioState>) -> Result<Vec<audio::AudioDeviceInfo>, String> {
+    state.with_manager(&app, |m| m.get_audio_devices().map_err(|e| e.to_string()))
 }
 
 #[tauri::command]
@@ -151,133 +78,96 @@ fn toggle_auto_launch(enable: bool) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn set_tactical_mode(window: tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
+    window.set_always_on_top(enabled).map_err(|e| e.to_string())?;
+    let _opacity = if enabled { 0.7 } else { 1.0 };
+    window.set_shadow(!enabled).map_err(|e| e.to_string())?;
+    // Note: window-vibrancy is used for overall effect, but we can nudge opacity
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 終了フラグの作成 (Arc<AtomicBool>)
-    let is_running = Arc::new(AtomicBool::new(true));
-    let is_running_for_thread = Arc::clone(&is_running);
-
-    // ホットキーの定義
-    let shortcut_str = "Super+Alt+A";
-
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new()
             .with_handler(move |app, _shortcut, event| {
-                if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                    let window_state = app.state::<Mutex<WindowManager>>();
-                    let mut guard = window_state.lock().unwrap();
-
-                    // マウス位置を取得してそこにポップアップさせる
+                use tauri_plugin_global_shortcut::ShortcutState;
+                if event.state() == ShortcutState::Pressed {
+                    let wm_state = app.state::<Mutex<WindowManager>>();
+                    let mut wm = wm_state.lock().unwrap();
                     let mut point = windows::Win32::Foundation::POINT { x: 0, y: 0 };
-                    let (icon_x, icon_y) = unsafe {
+                    let pos = unsafe {
                         if windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut point).is_ok() {
                             (point.x, point.y)
                         } else {
                             (0, 0)
                         }
                     };
-                    guard.toggle(app, (icon_x, icon_y));
+                    wm.toggle(app, pos);
                 }
             })
             .build()
         )
         .manage(AudioState(Mutex::new(None)))
         .manage(Mutex::new(WindowManager::default()))
-        .setup(move |app| {
-            // ホットキーの登録
+        .setup(|app| {
             use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
             use std::str::FromStr;
+            let _ = app.global_shortcut().register(Shortcut::from_str("Super+Alt+A").unwrap());
 
-            if let Ok(ctrl_alt_a) = Shortcut::from_str(shortcut_str) {
-                if let Err(e) = app.global_shortcut().register(ctrl_alt_a) {
-                    eprintln!("PULSE: Failed to register shortcut: {}", e);
-                }
-            } else {
-                eprintln!("PULSE: Invalid shortcut string: {}", shortcut_str);
-            }
-
-            // トレイのインライン初期化
-            let quit_i = MenuItem::with_id(app, "quit", "Exit", true, None::<&str>)?;
-            let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
-
-            let is_running_for_menu = Arc::clone(&is_running);
-            let _tray = TrayIconBuilder::new()
+            let handle = app.handle().clone();
+            
+            TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
-                .menu(&menu)
-                .on_menu_event(move |app, event| {
-                    let window_state = app.state::<Mutex<WindowManager>>();
-                    let mut guard = window_state.lock().unwrap();
-                    
-                    match event.id.as_ref() {
-                        "quit" => {
-                            // 終了フラグを倒す
-                            is_running_for_menu.store(false, Ordering::SeqCst);
-                            // 強制終了プロトコル (道連れ終了)
-                            std::process::exit(0);
-                        }
-                        "show" => {
-                            guard.toggle(app, (0, 0));
-                        }
-                        _ => {}
-                    }
-                })
                 .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: tauri::tray::MouseButton::Left,
-                        button_state: tauri::tray::MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let app = tray.app_handle();
-                        let window_state = app.state::<Mutex<WindowManager>>();
-                        let mut guard = window_state.lock().unwrap();
-
-                        let mut point = windows::Win32::Foundation::POINT { x: 0, y: 0 };
-                        let (icon_x, icon_y) = unsafe {
-                            if windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut point).is_ok() {
-                                (point.x, point.y)
-                            } else {
-                                (0, 0)
-                            }
-                        };
-
-                        guard.toggle(app, (icon_x, icon_y));
+                    if let TrayIconEvent::Click { position, button, button_state, .. } = event {
+                        if button == MouseButton::Left && button_state == MouseButtonState::Up {
+                            let app = tray.app_handle();
+                            let wm_state = app.state::<Mutex<WindowManager>>();
+                            let mut wm = wm_state.lock().unwrap();
+                            wm.toggle(app, (position.x as i32, position.y as i32));
+                        }
                     }
                 })
                 .build(app)?;
 
-            std::mem::forget(_tray);
-
-            // ウィンドウの初期設定
             if let Some(window) = app.get_webview_window("main") {
-                #[cfg(target_os = "windows")]
-                {
-                    let _ = apply_acrylic(&window, Some((10, 10, 10, 180)));
+                let wm_state = app.state::<Mutex<WindowManager>>();
+                let wm = wm_state.lock().unwrap();
+                wm.apply_visual_effects(&window);
+
+                // テスト用：環境変数があれば即座に中央に表示
+                if std::env::var("PULSE_TEST_MODE").is_ok() {
+                    let _ = window.set_position(tauri::PhysicalPosition::new(200, 200));
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                    let _ = window.set_always_on_top(true);
                 }
             }
 
-            // Peak Pulse 配信ループ (60fps)
-            let handle = app.handle().clone();
+            let handle_task = handle.clone();
             std::thread::spawn(move || {
-                use tauri::Emitter;
-                while is_running_for_thread.load(Ordering::SeqCst) {
+                let mut session_refresh_counter = 0;
+                loop {
                     std::thread::sleep(std::time::Duration::from_millis(16));
-                    let state = handle.state::<AudioState>();
-                    let peaks: Result<Vec<(u32, f32)>, String> = state.with_manager(&handle, |manager: &mut AudioManager| {
-                        manager.get_peak_levels().map_err(|e: windows::core::Error| e.to_string())
-                    });
-
-                    if let Ok(peak_data) = peaks {
-                        if !peak_data.is_empty() {
-                            let payload: Vec<serde_json::Value> = peak_data
-                                .into_iter()
-                                .map(|(pid, peak)| serde_json::json!({ "pid": pid, "peak": peak }))
-                                .collect();
-                            let _ = handle.emit("audio-pulse", payload);
+                    session_refresh_counter += 1;
+                    
+                    let state = handle_task.state::<AudioState>();
+                    let _ = state.with_manager(&handle_task, |m| {
+                        use tauri::Emitter;
+                        if let Ok(peaks) = m.get_peak_levels() {
+                            let _ = handle_task.emit("audio-pulse", peaks);
                         }
-                    }
+                        
+                        if session_refresh_counter >= 120 {
+                            session_refresh_counter = 0;
+                            if let Ok(sessions) = m.get_sessions() {
+                                let _ = handle_task.emit("refresh-sessions", sessions);
+                            }
+                        }
+                        Ok(())
+                    });
                 }
             });
 
@@ -289,17 +179,10 @@ pub fn run() {
             set_session_mute,
             set_audio_routing,
             get_audio_devices,
-            set_default_device,
-            hide_window,
-            set_window_position,
             is_auto_launch_enabled,
-            toggle_auto_launch
+            toggle_auto_launch,
+            set_tactical_mode
         ])
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|_app_handle, event| {
-            if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                api.prevent_exit();
-            }
-        });
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }

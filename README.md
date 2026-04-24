@@ -1,97 +1,65 @@
-# 🚀 Antigravity Pulse
+# 🌌 Antigravity Pulse
 
-[![Rust](https://img.shields.io/badge/rust-1.93%2B-orange.svg)](https://www.rust-lang.org/)
-[![Tauri](https://img.shields.io/badge/tauri-v2-blue.svg)](https://tauri.app/)
-[![React](https://img.shields.io/badge/react-19-cyan.svg)](https://react.dev/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/charge0315/antigravity-pulse.svg?style=social)](https://github.com/charge0315/antigravity-pulse/stargazers)
+<p align="center">
+  <img src="assets/hero-shot.png" alt="Antigravity Pulse UI" width="380" />
+</p>
 
-**Antigravity Pulse** is a next-generation audio control interface for Windows, engineered for peak performance and a fluid user experience. Powered by a high-performance Rust backend and a modern React frontend, it provides unparalleled control over your system's audio landscape.
-
-[**English**] | [**日本語**](#-日本語)
+**Antigravity Pulse** は、Windows 11 のために設計された、究極の視認性と操作性を備えた「戦術的」オーディオミキサーです。
+Tauri v2 + React 19 + Rust (windows-rs) を駆使し、OS の非公開 ABI を直接制御することで、標準機能を凌駕する体験を提供します。
 
 ---
 
-## ✨ Core Features
+## ✨ 主な機能
 
-### 💎 Fluid UX & Modern Design
-Experience a native-feeling interface with **Mica and Acrylic** effects, optimized for Windows 11. Our **Fluid UX** ensures 60fps animations and instant responsiveness, making audio management feel like a core part of the OS.
+### 1. High-Vis Elite UI (高密度計器盤)
+*   **GPU 加速ピークメーター**: CSS アニメーションを一切使わず、Canvas API を経由して 60fps で滑らかに描画。CPU 負荷を極限まで抑えたネオンパルス。
+*   **3段積みアプリカード**: 必要な情報を 380px の幅に凝縮。アイコン、PID、デバイス名、ボリューム、パルスを一目で把握。
+*   **Mica / Acrylic サポート**: Windows 11 のネイティブ視覚効果に完全対応。
 
-### ⚡ Real-time Pulse Engine
-Built on the **Antigravity Protocol**, our engine uses event-driven WASAPI (Windows Audio Session API) to synchronize volume states with zero polling. Feel the rhythm with **Neon Peak Meters v2**—GPU-accelerated Canvas rendering at **60fps** for ultra-smooth visual feedback with minimal CPU impact.
+### 2. ABI Mastery & D&D ルーティング
+*   **直感的な操作**: アプリカードをデバイスパネルへ **ドラッグ＆ドロップ** するだけで、即座に出力先を切り替え。
+*   **確実な制御**: 非公開の VTable Index 25 を直接叩き、Windows 内部の 3 つのオーディオ役割（コンソール、メディア、通信）を一度に更新。
 
-### 📍 Intelligent Positioning
-Smart, taskbar-aware window placement. Whether your taskbar is top, bottom, left, or right, or you're using a multi-monitor setup, Antigravity Pulse intelligently snaps to the perfect position. Plus, use the **Global Hotkey (`Win+Alt+A`)** to summon the mixer instantly from anywhere.
-
-### 🔀 Advanced Audio Routing
-Take command of your audio flow. Assign specific applications to different output devices (speakers, headphones, virtual cables) on the fly. Our engine utilizes a custom **ABI-compatible VTable interface** (matching pro-grade tools like EarTrumpet) to ensure rock-solid stability during device handovers.
-
-### 📊 High-Vis Elite UI
-Designed for power users. The **triple-stacked app card** layout maximizes information density without clutter, perfectly optimized for large monitors and complex audio setups.
-
----
-
-## 🛠️ Technical Stack
-
-- **Backend**: Rust 1.93+ with **Tauri v2** for memory safety and native performance.
-- **Frontend**: React 19 + Tailwind CSS + **GPU-Accelerated Canvas** for fluid visual components.
-- **Engine**: Direct `windows-rs` integration with **ABI-level COM/Win32** mastery.
-- **Visuals**: Native Win32 transparency (Mica/Acrylic) via `window-vibrancy`.
+### 3. プロフェッショナルな実用性
+*   **Process Shadowing**: プロセスハンドルを直接監視し、終了したアプリがミキサーに残る「ゴーストセッション」を完全に排除。
+*   **グローバル召喚**: `Win + Alt + A` ホットキーで、マウスカーソルの位置に瞬時にミキサーを表示。
+*   **タクティカル・モード**: チェックボックス一つで透過度を上げ、Always on Top（常に最前面）に固定。作業を邪魔せず音量を常時監視。
+*   **自動起動**: Windows ログイン時のオートローンチ制御を完備。
 
 ---
 
-## 🚀 Getting Started
+## 🚀 クイックスタート
 
-### Prerequisites
-- **Windows 10/11**
-- **Rust** (Latest stable)
-- **Node.js** (v18+)
-- **Visual Studio Build Tools 2022** (with C++ workload)
+### 開発環境の要件
+*   Node.js 22+ & npm
+*   Rust (latest stable)
+*   Windows 10 Build 1709+ (Mica などの高度な効果には Windows 11 推奨)
 
-### Installation & Development
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/charge0315/antigravity-pulse.git
-   cd antigravity-pulse
-   ```
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Run in development mode:
-   ```bash
-   npm run tauri dev
-   ```
+### ビルドと実行
+```bash
+# 依存関係のインストール
+npm install
+
+# 完全なビルド (フロントエンド + Rust)
+npm run build
+npx tauri build --no-bundle
+
+# 実行
+./src-tauri/target/release/antigravity-pulse.exe
+```
 
 ---
 
-## 🤝 Contributing
-
-We welcome contributions from the community! Check out our [CONTRIBUTING.md](./CONTRIBUTING.md) to get started. Let's build the future of audio together. 🎸
-
----
-
-## ⭐ Support the Project
-
-If you find Antigravity Pulse useful, please consider giving us a star! It helps the project grow and motivates us to keep pushing the boundaries of what's possible.
+## 🛠️ 技術スタック
+- **Frontend**: React 19, TypeScript, Tailwind CSS v4, Vite
+- **Backend**: Rust 2021, Tauri v2
+- **Windows API**: `windows-rs` 0.58 (Audio Endpoint, Policy Config, GDI, WinReg)
+- **Visuals**: `window-vibrancy`, HTML5 Canvas (GPU Accelerated)
 
 ---
 
-## 🇯🇵 日本語
-
-**Antigravity Pulse** は、パフォーマンスと極上の操作性を追求した Windows 向け次世代オーディオコントロール・インターフェースです。Rust による高速なバックエンドと React によるモダンなフロントエンドを融合させ、システムオーディオの制御を再定義します。
-
-### 🌟 主な機能
-- **Fluid UX**: Windows 11 に最適化された Mica/Acrylic 効果と、60fps の滑らかなアニメーション。
-- **Neon Peak Meter v2**: Canvas API と GPU 加速による超低負荷・高精度なビジュアルフィードバック。
-- **Real-time Pulse Engine**: ポーリングを排除したイベント駆動型アーキテクチャによる、遅延のない音量同期。
-- **インテリジェント配置**: `Win+Alt+A` のグローバル・ホットキー対応。タスクバー座標を自動認識し、常に最適な位置に表示。
-- **高度なルーティング**: ABI レベルで最適化されたデバイス切り替えエンジンにより、アプリごとの出力を瞬時かつ安定して変更可能。
-- **High-Vis Elite UI**: 3段積みアプリカードを採用した、大画面でも視認性の高いプロフェッショナルな計器盤。
-
-### 🚀 開発の始め方
-`npm install` 後、`npm run tauri dev` で開発サーバーが起動します。ビルドには Rust と Visual Studio Build Tools 2022 が必要です。
+## ⚖️ 免責事項
+本プロジェクトは、Windows の非公開 API を使用しています。将来の OS アップデートにより挙動が変わる可能性がありますが、Antigravity Protocol に基づき、常に最新の ABI Mastery を維持することを目指します。
 
 ---
-
-MIT License © 2026 Mitsuhide / charge0315
+Created with 🎸 and AI precision.
